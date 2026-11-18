@@ -1,0 +1,16 @@
+{
+  "name": "科学基础示例",
+  "questions": [
+    {
+      "kind": "multiple-choice",
+      "prompt": "在标准大气压下，纯水的冰点是多少？",
+      "options": ["0°C", "10°C", "100°C"],
+      "correctOptionIndex": 0
+    },
+    {
+      "kind": "short-answer",
+      "prompt": "为什么金属勺和木勺在室温相同时，金属勺摸起来更冷？",
+      "referenceAnswer": "金属导热比木材快，会更快带走手上的热量。"
+    }
+  ]
+}

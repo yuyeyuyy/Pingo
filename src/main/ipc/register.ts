@@ -1,18 +1,23 @@
-import { ipcMain } from 'electron'
+import { clipboard, ipcMain } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import { getAppInfo } from '../../application/app-info'
 import type { AppRuntime } from '../../application/app-info'
 import type { QuestionBankService } from '../../application/question-bank/service'
+import { bankTemplate } from '../../application/question-bank/validation'
 import type { SchedulerService } from '../../application/reminders/scheduler'
 import {
   pauseOption,
+  rateAnswerRequest,
   reminderSettings,
   sessionId,
   sessionTarget,
+  setAnswerFavoriteRequest,
+  studyMaterialTarget,
   snoozeRequest,
   submitRequest,
 } from '../../application/reminders/validation'
 import { IPC_CHANNELS } from '../../shared/ipc'
+import { conversionPrompt } from '../../shared/question-import-prompt'
 import type { ApiResponse, InvokeApi } from '../../shared/ipc'
 import { handleAppRequest } from './app-request'
 
@@ -34,8 +39,22 @@ export function registerIpc(
     listBanks: { arity: 0, run: banks.listBanks },
     createBank: { arity: 1, run: banks.createBank },
     renameBank: { arity: 1, run: banks.renameBank },
-    deleteBank: { arity: 1, run: banks.deleteBank },
+    deleteBank: {
+      arity: 1,
+      run: (input) => {
+        banks.deleteBank(input)
+        reminders.reviewsChanged()
+      },
+    },
     listQuestions: { arity: 1, run: banks.listQuestions },
+    queryQuestions: { arity: 1, run: banks.queryQuestions },
+    removeBankFavorite: {
+      arity: 1,
+      run: (input) => {
+        banks.removeFavorite(input)
+        reminders.reviewsChanged()
+      },
+    },
     createQuestion: {
       arity: 1,
       run: (input) => {
@@ -44,8 +63,21 @@ export function registerIpc(
         return question
       },
     },
-    updateQuestion: { arity: 1, run: banks.updateQuestion },
-    deleteQuestion: { arity: 1, run: banks.deleteQuestion },
+    updateQuestion: {
+      arity: 1,
+      run: (input) => {
+        const question = banks.updateQuestion(input)
+        reminders.reviewsChanged()
+        return question
+      },
+    },
+    deleteQuestion: {
+      arity: 1,
+      run: (input) => {
+        banks.deleteQuestion(input)
+        reminders.reviewsChanged()
+      },
+    },
     importQuestionBank: {
       arity: 1,
       run: (input) => {
@@ -53,6 +85,18 @@ export function registerIpc(
         reminders.questionsAdded()
         return bank
       },
+    },
+    appendQuestionImport: {
+      arity: 1,
+      run: (input) => {
+        const result = banks.appendQuestionImport(input)
+        reminders.questionsAdded()
+        return result
+      },
+    },
+    copyQuestionImportPrompt: {
+      arity: 1,
+      run: (template) => clipboard.writeText(conversionPrompt(bankTemplate(template))),
     },
     getReminderStatus: { arity: 0, run: () => reminders.status() },
     saveReminderSettings: {
@@ -69,10 +113,25 @@ export function registerIpc(
       window: 'answer',
       run: (input) => reminders.submit(submitRequest(input)),
     },
+    setAnswerFavorite: {
+      arity: 1,
+      window: 'answer',
+      run: (input) => reminders.setFavorite(setAnswerFavoriteRequest(input)),
+    },
+    rateAnswer: {
+      arity: 1,
+      window: 'answer',
+      run: (input) => reminders.rateAnswer(rateAnswerRequest(input)),
+    },
     advanceAnswer: {
       arity: 1,
       window: 'answer',
       run: (input) => reminders.advance(sessionTarget(input)),
+    },
+    advanceStudyMaterial: {
+      arity: 1,
+      window: 'answer',
+      run: (input) => reminders.advanceStudyMaterial(studyMaterialTarget(input)),
     },
     snoozeLearning: {
       arity: 1,

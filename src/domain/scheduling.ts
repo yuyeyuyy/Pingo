@@ -1,11 +1,18 @@
+import type { PracticeSettings } from './review'
+import type { LearningStrategy } from './progressive-learning'
+
 export const MINUTE = 60_000
 export const INTERVAL_PRESETS = [5, 15, 30, 60, 120] as const
 export const QUESTION_PRESETS = [1, 3, 5, 10] as const
 export const SNOOZE_MINUTES = [5, 10, 30, 60] as const
 export const PAUSE_OPTIONS = [30, 60, 120, 'tomorrow'] as const
 export type PauseOption = (typeof PAUSE_OPTIONS)[number]
+export type SessionMode = 'study' | 'practice'
 
 export interface ReminderSettings {
+  sessionMode?: SessionMode
+  strategy?: LearningStrategy
+  practice?: PracticeSettings
   enabled: boolean
   intervalMinutes: number
   questionsPerSession: number

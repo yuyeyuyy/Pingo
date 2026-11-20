@@ -88,7 +88,7 @@ describe('reminder scheduler', () => {
     open?.()
     open?.()
     time(100)
-    expect(fixture.source).toHaveBeenCalledExactlyOnceWith(3)
+    expect(fixture.source).toHaveBeenCalledExactlyOnceWith(3, { bankId: null, source: 'all' })
     expect(fixture.show).toHaveBeenCalledExactlyOnceWith(true)
     expect(current(service).sessionId).toBe('session-1')
     expect(current(service).question).not.toHaveProperty('correctOptionIndex')

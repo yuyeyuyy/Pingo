@@ -6,14 +6,32 @@ import {
   schedulerPhase,
 } from '../../domain/scheduling'
 import type { PauseOption, ReminderSettings } from '../../domain/scheduling'
-import { gradeAnswer, questionView, sessionSummary } from '../../domain/session'
+import { DEFAULT_PRACTICE_SETTINGS, nextPracticeSource, samePractice } from '../../domain/review'
+import type { PracticeSettings, ReviewAttempt } from '../../domain/review'
+import {
+  gradeAnswer,
+  nextStudyMaterial,
+  prepareSessionQuestion,
+  questionView,
+  sessionSummary,
+} from '../../domain/session'
+import type { StudySubject } from '../../domain/study-material'
 import type {
   AnswerView,
   LearningSession,
   SessionQuestion,
+  SessionStudyMaterial,
   SessionTarget,
+  StudyMaterialTarget,
 } from '../../domain/session'
-import type { ReminderStatus, SubmitAnswerRequest } from '../../shared/reminders'
+import type {
+  RateAnswerRequest,
+  ReminderStatus,
+  SetAnswerFavoriteRequest,
+  SubmitAnswerRequest,
+} from '../../shared/reminders'
+import { RequestError } from '../request-error'
+import type { LearningEngine, LearningSelection } from './learning-engine'
 import { invalid } from './validation'
 
 export interface ReminderState {
@@ -21,6 +39,7 @@ export interface ReminderState {
   pauseUntil: number | null
   nextAt: number | null
   session: LearningSession | null
+  completedInCycle?: number
 }
 
 export interface EndedSession {
@@ -29,14 +48,24 @@ export interface EndedSession {
   outcome: 'completed' | 'skipped'
 }
 
+export interface ReminderEffects {
+  ended?: EndedSession
+  review?: ReviewAttempt
+  studySeen?: StudySubject & { at: number }
+}
+
 export interface ReminderStore {
   load(): ReminderState | undefined
-  save(state: ReminderState, ended?: EndedSession): void
+  save(state: ReminderState, effects?: ReminderEffects): void
+  isFavorite(questionId: string): boolean
+  setFavorite(questionId: string, favorite: boolean): boolean
 }
 
 export interface SchedulerDependencies {
   store: ReminderStore
-  questions(count: number): readonly SessionQuestion[]
+  learning?: LearningEngine
+  studyMaterials?(questionIds: readonly string[]): readonly SessionStudyMaterial[]
+  questions(count: number, selection: LearningSelection): readonly SessionQuestion[]
   makeId(): string
   now(): number
   schedule(delay: number, callback: () => void): () => void
@@ -57,12 +86,16 @@ export class SchedulerService {
   private sleeping = false
   private cancelTimer?: () => void
   private notice: ReminderStatus['notice'] = null
+  private reviewRevision = 0
   private summary: Extract<AnswerView, { kind: 'summary' }> | null = null
   private notificationToken: object | null = null
 
   constructor(private readonly dependencies: SchedulerDependencies) {
     this.state = dependencies.store.load() ?? {
-      settings: { ...DEFAULT_REMINDER_SETTINGS },
+      settings: {
+        ...DEFAULT_REMINDER_SETTINGS,
+        ...(dependencies.learning ? { strategy: 'progressive' } : {}),
+      },
       pauseUntil: null,
       nextAt: null,
       session: null,
@@ -101,6 +134,10 @@ export class SchedulerService {
 
   status(): ReminderStatus {
     const { settings, pauseUntil, session, nextAt } = this.state
+    const learning =
+      settings.strategy === 'progressive'
+        ? this.dependencies.learning?.status(this.selection(), this.dependencies.now())
+        : undefined
     return {
       settings,
       phase: this.running
@@ -110,12 +147,18 @@ export class SchedulerService {
       nextAt: settings.enabled ? nextAt : null,
       pendingSessionId: session?.stage === 'pending' ? session.id : null,
       notice: this.notice,
+      reviewRevision: this.reviewRevision,
+      ...(learning ? { learning } : {}),
     }
   }
 
   answerView(): AnswerView {
     const session = this.state.session
-    return session?.stage === 'active' ? questionView(session) : this.summary
+    if (session?.stage !== 'active') return this.summary
+    const material = nextStudyMaterial(session)
+    if (material) return material
+    const question = session.questions[session.index]
+    return questionView(session, !!question && this.dependencies.store.isFavorite(question.id))
   }
 
   updateSettings(settings: ReminderSettings): ReminderStatus {
@@ -130,7 +173,27 @@ export class SchedulerService {
     ) {
       target = this.dependencies.now() + settings.intervalMinutes * MINUTE
     }
-    this.commit({ ...this.state, settings, nextAt: target })
+    const practice = settings.practice ?? this.state.settings.practice
+    const strategy = settings.strategy ?? this.state.settings.strategy
+    const sessionMode = settings.sessionMode ?? this.state.settings.sessionMode
+    const practiceChanged = !samePractice(practice ?? DEFAULT_PRACTICE_SETTINGS, this.practice())
+    if (
+      practiceChanged ||
+      strategy !== this.state.settings.strategy ||
+      sessionMode !== this.state.settings.sessionMode
+    )
+      this.notice = null
+    this.commit({
+      ...this.state,
+      settings: {
+        ...settings,
+        ...(practice ? { practice } : {}),
+        ...(strategy ? { strategy } : {}),
+        ...(sessionMode ? { sessionMode } : {}),
+      },
+      nextAt: target,
+      completedInCycle: practiceChanged ? 0 : this.state.completedInCycle,
+    })
     if (!settings.enabled) this.dismiss()
     return this.status()
   }
@@ -181,9 +244,8 @@ export class SchedulerService {
     if (current?.stage === 'active') {
       this.present(true)
     } else {
-      const session = current ?? this.makeSession()
+      const session = current ?? this.makeSession(true)
       if (session) this.open(session, true)
-      else this.emptyBank()
     }
     return this.status()
   }
@@ -195,10 +257,27 @@ export class SchedulerService {
   }
 
   questionsAdded(): void {
-    if (this.notice === 'empty-bank') {
+    if (
+      this.notice === 'empty-bank' ||
+      this.notice === 'empty-study' ||
+      this.notice === 'nothing-due'
+    )
       this.notice = null
-      this.publish()
+    this.publish()
+  }
+
+  reviewsChanged(): void {
+    this.reviewRevision++
+    this.publish()
+  }
+
+  setFavorite(input: SetAnswerFavoriteRequest): AnswerView {
+    if (!this.target(input)) return this.answerView()
+    if (!this.dependencies.store.setFavorite(input.questionId, input.favorite)) {
+      throw new RequestError('NOT_FOUND', '该题已经从题库删除。')
     }
+    this.reviewsChanged()
+    return this.answerView()
   }
 
   submit(input: SubmitAnswerRequest): AnswerView {
@@ -208,7 +287,29 @@ export class SchedulerService {
     const feedback = question && gradeAnswer(question, input.answer)
     if (!feedback) invalid('请填写有效的答案。')
     const answer = { questionId: input.questionId, feedback, submittedAt: this.dependencies.now() }
-    this.commit({ ...this.state, session: { ...session, answers: [...session.answers, answer] } })
+    this.commit(
+      { ...this.state, session: { ...session, answers: [...session.answers, answer] } },
+      {
+        review: { questionId: input.questionId, outcome: feedback.outcome, at: answer.submittedAt },
+      },
+    )
+    return this.answerView()
+  }
+
+  rateAnswer(input: RateAnswerRequest): AnswerView {
+    const session = this.target(input)
+    if (!session) return this.answerView()
+    const submitted = session.answers[session.index]
+    const feedback = submitted?.feedback
+    if (!submitted || feedback?.kind !== 'short-answer' || feedback.outcome !== 'ungraded')
+      return this.answerView()
+    const outcome: 'correct' | 'incorrect' = input.correct ? 'correct' : 'incorrect'
+    const answers = [...session.answers]
+    answers[session.index] = { ...submitted, feedback: { ...feedback, outcome } }
+    this.commit(
+      { ...this.state, session: { ...session, answers } },
+      { review: { questionId: input.questionId, outcome, at: this.dependencies.now() } },
+    )
     return this.answerView()
   }
 
@@ -217,6 +318,24 @@ export class SchedulerService {
     if (!session || !session.answers[session.index]) return this.answerView()
     if (session.index + 1 === session.questions.length) this.finish('completed')
     else this.commit({ ...this.state, session: { ...session, index: session.index + 1 } })
+    return this.answerView()
+  }
+
+  advanceStudyMaterial(input: StudyMaterialTarget): AnswerView {
+    const session = this.state.session
+    if (session?.stage !== 'active' || session.id !== input.sessionId || !session.study)
+      return this.answerView()
+    const material = nextStudyMaterial(session)
+    if (material?.position === input.position) {
+      const next = { ...session, study: { ...session.study, index: input.position } }
+      this.commit(
+        {
+          ...this.state,
+          session: next,
+        },
+        { studySeen: this.studyExposure(next) },
+      )
+    }
     return this.answerView()
   }
 
@@ -249,32 +368,57 @@ export class SchedulerService {
     const session = this.state.session
     return session?.stage === 'active' &&
       input.sessionId === session.id &&
+      !nextStudyMaterial(session) &&
       input.questionId === session.questions[session.index]?.id
       ? session
       : null
   }
 
-  private makeSession(): LearningSession | null {
-    const count = this.state.settings.questionsPerSession
+  private makeSession(allowEarly = false): LearningSession | null {
+    const { questionsPerSession: count, strategy = 'random' } = this.state.settings
+    const practice = this.practice()
+    const selection = this.selection()
+    const now = this.dependencies.now()
+    const planned =
+      strategy === 'progressive'
+        ? this.dependencies.learning?.pick(count, selection, now, allowEarly)
+        : undefined
+    const available = planned?.questions ?? this.sampleRandom(count, selection)
     const questions = [
-      ...new Map(
-        this.dependencies.questions(count).map((question) => [question.id, question]),
-      ).values(),
+      ...new Map(available.map((question) => [question.id, question])).values(),
     ].slice(0, count)
-    if (!questions.length) return null
+    const materials = selection.requiresMaterial
+      ? (this.dependencies.studyMaterials?.(questions.map(({ id }) => id)) ?? [])
+      : undefined
+    if (!questions.length || (materials && materials.length !== questions.length)) {
+      this.notice =
+        planned?.notice ??
+        (selection.requiresMaterial
+          ? 'empty-study'
+          : selection.source === 'favorites'
+            ? 'empty-favorites'
+            : 'empty-bank')
+      this.commit({ ...this.state, nextAt: this.nextRegular(now) })
+      return null
+    }
     return {
       id: this.dependencies.makeId(),
-      startedAt: this.dependencies.now(),
+      startedAt: now,
       stage: 'pending',
-      questions,
+      questions: questions.map((question) => prepareSessionQuestion(question, Math.random)),
       index: 0,
       answers: [],
+      practice,
+      strategy,
+      ...(materials ? { study: { materials, index: 0 } } : {}),
     }
   }
 
-  private emptyBank(): void {
-    this.notice = 'empty-bank'
-    this.commit({ ...this.state, nextAt: this.nextRegular() })
+  private sampleRandom(count: number, selection: LearningSelection): readonly SessionQuestion[] {
+    const questions = this.dependencies.questions(count, selection)
+    return questions.length === 0 && selection.source === 'mistakes'
+      ? this.dependencies.questions(count, { ...selection, source: 'all' })
+      : questions
   }
 
   private finish(outcome: EndedSession['outcome']): void {
@@ -283,7 +427,19 @@ export class SchedulerService {
     const at = this.dependencies.now()
     const summary = outcome === 'completed' ? sessionSummary(session) : null
     const ended = session.answers.length > 0 ? { session, at, outcome } : undefined
-    this.commit({ ...this.state, session: null, nextAt: this.nextRegular(at) }, ended, summary)
+    const practice = this.practice()
+    const completedInCycle =
+      outcome === 'completed' &&
+      session.practice &&
+      samePractice(session.practice, practice) &&
+      practice.source === 'all' &&
+      practice.wrongEvery > 0
+        ? ((this.state.completedInCycle ?? 0) + 1) % practice.wrongEvery
+        : this.state.completedInCycle
+    this.commit(
+      { ...this.state, session: null, nextAt: this.nextRegular(at), completedInCycle },
+      { ended, summary },
+    )
     this.dismiss()
   }
 
@@ -291,6 +447,19 @@ export class SchedulerService {
     return this.state.settings.enabled && this.state.pauseUntil === null
       ? this.afterInterval(now)
       : null
+  }
+
+  private practice(): PracticeSettings {
+    return this.state.settings.practice ?? DEFAULT_PRACTICE_SETTINGS
+  }
+
+  private selection(): LearningSelection {
+    const practice = this.practice()
+    return {
+      bankId: practice.bankId,
+      source: nextPracticeSource(practice, this.state.completedInCycle ?? 0),
+      ...(this.state.settings.sessionMode === 'study' ? { requiresMaterial: true } : {}),
+    }
   }
 
   private afterInterval(now: number): number {
@@ -305,10 +474,17 @@ export class SchedulerService {
     }
   }
 
-  private commit(next: ReminderState, ended?: EndedSession, summary = this.summary): void {
-    this.dependencies.store.save(next, ended)
+  private commit(
+    next: ReminderState,
+    effects: ReminderEffects & {
+      summary?: Extract<AnswerView, { kind: 'summary' }> | null
+    } = {},
+  ): void {
+    const { summary = this.summary, ...writes } = effects
+    this.dependencies.store.save(next, writes)
     this.state = next
     this.summary = summary
+    if (writes.review && writes.review.outcome !== 'ungraded') this.reviewRevision++
     this.arm()
     this.publish()
   }
@@ -354,10 +530,7 @@ export class SchedulerService {
     }
 
     const next = session ?? this.makeSession()
-    if (!next) {
-      this.emptyBank()
-      return
-    }
+    if (!next) return
     const popup =
       settings.mode === 'popup' &&
       (!settings.avoidFullscreen || system.fullscreen === false) &&
@@ -370,11 +543,28 @@ export class SchedulerService {
     this.notice = null
     this.commit(
       { ...this.state, session: { ...session, stage: 'active' }, nextAt: null },
-      undefined,
-      null,
+      { summary: null, studySeen: this.studyExposure(session) },
     )
     this.dismiss()
     this.present(focus)
+  }
+
+  private studyExposure(session: LearningSession): ReminderEffects['studySeen'] {
+    const material = nextStudyMaterial(session)
+    if (!material) return undefined
+    if (material.material.subject)
+      return { ...material.material.subject, at: this.dependencies.now() }
+    // Sessions saved before subject tracking can still resume with their original cards.
+    const previous = this.dependencies.studyMaterials?.(session.questions.map(({ id }) => id))[
+      material.position - 1
+    ]
+    if (
+      previous?.key === material.material.key &&
+      previous.bankName === material.material.bankName &&
+      previous.subject
+    )
+      return { ...previous.subject, at: this.dependencies.now() }
+    return undefined
   }
 
   private present(focus: boolean): void {

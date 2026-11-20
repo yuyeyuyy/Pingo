@@ -1,7 +1,14 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import type { PingoApi } from '../../../shared/ipc'
-import { INTERVAL_PRESETS, PAUSE_OPTIONS, QUESTION_PRESETS } from '../../../shared/reminders'
+import { PRACTICE_SOURCES } from '../../../shared/question-bank'
+import type { PracticeSource, QuestionBank } from '../../../shared/question-bank'
+import {
+  DEFAULT_PRACTICE_SETTINGS,
+  INTERVAL_PRESETS,
+  PAUSE_OPTIONS,
+  QUESTION_PRESETS,
+} from '../../../shared/reminders'
 import type {
   PauseOption,
   ReminderSettings as Settings,
@@ -16,6 +23,7 @@ const intervalNames = [
   '低频学习 · 1 小时',
   '偶尔复习 · 2 小时',
 ]
+const practiceSources = Object.keys(PRACTICE_SOURCES) as PracticeSource[]
 const phaseNames: Record<ReminderStatus['phase'], string> = {
   STOPPED: '定时提醒已关闭',
   WAITING: '等待下次提醒',
@@ -42,6 +50,12 @@ function preset(value: number, choices: readonly number[]) {
 
 function ReminderForm({ settings, api }: { settings: Settings; api: PingoApi }) {
   const [draft, setDraft] = useState(settings)
+  const originalPractice = settings.practice ?? DEFAULT_PRACTICE_SETTINGS
+  const [bankId, setBankId] = useState(originalPractice.bankId ?? '')
+  const [source, setSource] = useState(originalPractice.source)
+  const [frequency, setFrequency] = useState(String(originalPractice.wrongEvery))
+  const [banks, setBanks] = useState<readonly QuestionBank[]>()
+  const [banksError, setBanksError] = useState('')
   const [interval, setInterval] = useState(preset(settings.intervalMinutes, INTERVAL_PRESETS))
   const [intervalValue, setIntervalValue] = useState(String(settings.intervalMinutes))
   const [unit, setUnit] = useState<'minutes' | 'hours'>('minutes')
@@ -53,6 +67,21 @@ function ReminderForm({ settings, api }: { settings: Settings; api: PingoApi }) 
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    void api
+      .listBanks()
+      .then((value) => {
+        if (active) setBanks(value)
+      })
+      .catch((cause: unknown) => {
+        if (active) setBanksError(desktopError(cause))
+      })
+    return () => {
+      active = false
+    }
+  }, [api])
 
   function change<K extends keyof Settings>(field: K, value: Settings[K]) {
     setDraft((current) => ({ ...current, [field]: value }))
@@ -75,6 +104,7 @@ function ReminderForm({ settings, api }: { settings: Settings; api: PingoApi }) 
       }
       await api.saveReminderSettings({
         ...draft,
+        practice: { bankId: bankId || null, source, wrongEvery: Number(frequency) },
         intervalMinutes: rounded,
         questionsPerSession: Number(count === 'custom' ? countValue : count),
         quietHours: quiet
@@ -102,6 +132,100 @@ function ReminderForm({ settings, api }: { settings: Settings; api: PingoApi }) 
         </label>
         <div className="reminder-fields">
           <label className="bank-field">
+            学习题库
+            <select
+              value={bankId}
+              aria-label="学习题库"
+              disabled={!banks}
+              onChange={(event) => setBankId(event.target.value)}
+            >
+              <option value="">全部题库</option>
+              {bankId && !banks?.some((bank) => bank.id === bankId) && (
+                <option value={bankId}>{banks ? '原题库已删除' : '正在读取所选题库'}</option>
+              )}
+              {banks?.map((bank) => (
+                <option value={bank.id} key={bank.id}>
+                  {bank.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="bank-field">
+            抽题范围
+            <select
+              value={source}
+              aria-label="抽题范围"
+              onChange={(event) => {
+                const selected = practiceSources.find((item) => item === event.target.value)
+                if (selected) setSource(selected)
+              }}
+            >
+              {practiceSources.map((item) => (
+                <option value={item} key={item}>
+                  {PRACTICE_SOURCES[item]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="bank-field">
+            学习模式
+            <select
+              aria-label="学习模式"
+              value={draft.sessionMode ?? 'practice'}
+              onChange={(event) =>
+                change('sessionMode', event.target.value === 'study' ? 'study' : 'practice')
+              }
+            >
+              <option value="practice">练习模式</option>
+              <option value="study">学习模式</option>
+            </select>
+            <span className="bank-hint">
+              {draft.sessionMode === 'study'
+                ? '优先展示没学过的内容，每份资料对应一道练习题。'
+                : '直接开始答题。'}
+            </span>
+          </label>
+          <label className="bank-field">
+            学习策略
+            <select
+              aria-label="学习策略"
+              value={draft.strategy ?? 'random'}
+              onChange={(event) =>
+                change('strategy', event.target.value === 'progressive' ? 'progressive' : 'random')
+              }
+            >
+              <option value="progressive">循序渐进</option>
+              <option value="random">随机抽题</option>
+            </select>
+          </label>
+        </div>
+        {banksError && (
+          <p className="bank-error" role="alert">
+            {banksError}
+          </p>
+        )}
+        {source === 'all' && (
+          <label className="bank-field">
+            每隔几轮抽取错题
+            <input
+              type="number"
+              min={0}
+              step={1}
+              required
+              value={frequency}
+              onChange={(event) => setFrequency(event.target.value)}
+            />
+            <span className="bank-hint">
+              按完成的轮次计算。例如填 3 时，第 3、6、9 轮抽错题。填 0 关闭。
+            </span>
+          </label>
+        )}
+        {source === 'mistakes' && (
+          <p className="bank-hint">错题本为空时，从所选题库的完整题目抽取。</p>
+        )}
+        {source === 'favorites' && <p className="bank-hint">收藏本为空时暂停本轮抽题。</p>}
+        <div className="reminder-fields">
+          <label className="bank-field">
             提醒间隔
             <select value={interval} onChange={(event) => setInterval(event.target.value)}>
               {INTERVAL_PRESETS.map((value, index) => (
@@ -114,7 +238,11 @@ function ReminderForm({ settings, api }: { settings: Settings; api: PingoApi }) 
           </label>
           <label className="bank-field">
             每次题量
-            <select value={count} onChange={(event) => setCount(event.target.value)}>
+            <select
+              aria-label="每次题量"
+              value={count}
+              onChange={(event) => setCount(event.target.value)}
+            >
               {QUESTION_PRESETS.map((value) => (
                 <option key={value} value={value}>
                   {value} 道
@@ -293,7 +421,28 @@ function ReminderControls({ api, status }: { api: PingoApi; status: ReminderStat
           <p className="bank-hint">你可以从这里继续学习。系统通知取决于 macOS 的通知设置。</p>
         )}
         {status.notice === 'empty-bank' && (
-          <p className="bank-hint">题库暂无题目。添加或导入题目后即可开始。</p>
+          <p className="bank-hint">所选题库暂无题目。可切换题库或添加题目。</p>
+        )}
+        {status.notice === 'empty-favorites' && (
+          <p className="bank-hint">所选收藏本暂无题目。可切换抽题范围或先收藏题目。</p>
+        )}
+        {status.notice === 'empty-study' && (
+          <p className="bank-hint">
+            所选范围暂无关联学习资料的题目。可导入带资料的题库，或切换到练习模式。
+          </p>
+        )}
+        {status.learning && (
+          <p className="bank-hint">
+            {status.learning.level
+              ? `当前难度 ${status.learning.level} / 5 · `
+              : !status.settings.practice?.bankId
+                ? '各题库独立进阶 · '
+                : ''}
+            {status.learning.dueCount} 道待复习
+          </p>
+        )}
+        {status.notice === 'nothing-due' && (
+          <p className="bank-hint">当前没有到期题或合适的新题。可以点「立即学习」提前练一道。</p>
         )}
       </div>
       <div className="bank-actions">

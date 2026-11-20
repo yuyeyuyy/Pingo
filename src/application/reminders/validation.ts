@@ -1,7 +1,15 @@
 import { PAUSE_OPTIONS, SNOOZE_MINUTES } from '../../domain/scheduling'
 import type { PauseOption, ReminderSettings } from '../../domain/scheduling'
-import type { SessionTarget } from '../../domain/session'
-import type { SubmitAnswerRequest } from '../../shared/reminders'
+import { PRACTICE_SOURCES } from '../../domain/review'
+import type { PracticeSource } from '../../domain/review'
+import type { SessionTarget, StudyMaterialTarget } from '../../domain/session'
+import type {
+  RateAnswerRequest,
+  SetAnswerFavoriteRequest,
+  SubmitAnswerRequest,
+} from '../../shared/reminders'
+import { BANK_LIMITS } from '../../shared/question-bank'
+import { id } from '../question-bank/validation'
 import { RequestError } from '../request-error'
 
 export function invalid(message: string): never {
@@ -28,6 +36,12 @@ export function reminderSettings(value: unknown): ReminderSettings {
   const input = record(value)
   const mode = input.mode
   if (mode !== 'notification' && mode !== 'popup') invalid('请选择有效的提醒方式。')
+  const strategy = input.strategy
+  if (strategy !== undefined && strategy !== 'random' && strategy !== 'progressive')
+    invalid('请选择有效的学习策略。')
+  const sessionMode = input.sessionMode
+  if (sessionMode !== undefined && sessionMode !== 'study' && sessionMode !== 'practice')
+    invalid('请选择有效的学习模式。')
   let quietHours: ReminderSettings['quietHours'] = null
   if (input.quietHours !== null) {
     const { start, end } = record(input.quietHours)
@@ -47,6 +61,20 @@ export function reminderSettings(value: unknown): ReminderSettings {
     avoidFullscreen: flag(input.avoidFullscreen),
     avoidIdle: flag(input.avoidIdle),
     quietHours,
+    ...(strategy === undefined ? {} : { strategy }),
+    ...(sessionMode === undefined ? {} : { sessionMode }),
+    ...(input.practice === undefined ? {} : { practice: practiceSettings(input.practice) }),
+  }
+}
+
+function practiceSettings(input: unknown) {
+  const { bankId, source, wrongEvery } = record(input)
+  if (typeof source !== 'string' || !Object.hasOwn(PRACTICE_SOURCES, source))
+    invalid('请选择有效的抽题范围。')
+  return {
+    bankId: bankId === null ? null : id(bankId),
+    source: source as PracticeSource,
+    wrongEvery: integer(wrongEvery, 0, Number.MAX_SAFE_INTEGER, '错题抽取频率必须为非负整数。'),
   }
 }
 
@@ -67,6 +95,14 @@ export function sessionTarget(input: unknown): SessionTarget {
   return { sessionId: sessionId(data.sessionId), questionId: sessionId(data.questionId) }
 }
 
+export function studyMaterialTarget(input: unknown): StudyMaterialTarget {
+  const data = record(input)
+  return {
+    sessionId: sessionId(data.sessionId),
+    position: integer(data.position, 1, 20, '学习资料位置无效。'),
+  }
+}
+
 export function snoozeRequest(input: unknown) {
   const data = record(input)
   const minutes = SNOOZE_MINUTES.find((value) => value === data.minutes)
@@ -78,6 +114,7 @@ export function submitRequest(input: unknown): SubmitAnswerRequest {
   const data = record(input)
   const target = sessionTarget(data)
   const answer = record(data.answer)
+  if (answer.kind === 'unsure') return { ...target, answer: { kind: answer.kind } }
   if (answer.kind === 'multiple-choice') {
     return {
       ...target,
@@ -91,5 +128,38 @@ export function submitRequest(input: unknown): SubmitAnswerRequest {
   ) {
     return { ...target, answer: { kind: answer.kind, text: answer.text } }
   }
+  if (
+    answer.kind === 'fill-in' &&
+    Array.isArray(answer.values) &&
+    answer.values.length <= BANK_LIMITS.maxBlanks
+  ) {
+    const values = Array.from(answer.values, (value: unknown) => {
+      if (typeof value !== 'string' || value.length > BANK_LIMITS.option) invalid('填空答案无效。')
+      return value
+    })
+    return { ...target, answer: { kind: answer.kind, values } }
+  }
+  if (
+    answer.kind === 'ordering' &&
+    Array.isArray(answer.order) &&
+    answer.order.length <= BANK_LIMITS.maxItems
+  ) {
+    const order = Array.from(answer.order, (value: unknown) =>
+      integer(value, 0, BANK_LIMITS.maxItems - 1, '排序下标无效。'),
+    )
+    return { ...target, answer: { kind: answer.kind, order } }
+  }
   return invalid('答案格式无效。')
+}
+
+export function setAnswerFavoriteRequest(input: unknown): SetAnswerFavoriteRequest {
+  const value = record(input)
+  if (typeof value.favorite !== 'boolean') invalid('收藏状态无效。')
+  return { ...sessionTarget(value), favorite: value.favorite }
+}
+
+export function rateAnswerRequest(input: unknown): RateAnswerRequest {
+  const value = record(input)
+  if (typeof value.correct !== 'boolean') invalid('自评结果无效。')
+  return { ...sessionTarget(value), correct: value.correct }
 }

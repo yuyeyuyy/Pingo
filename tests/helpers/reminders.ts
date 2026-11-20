@@ -29,6 +29,7 @@ export const questions: SessionQuestion[] = [
 export function schedulerFixture(overrides: Partial<SchedulerDependencies> = {}) {
   let state: ReminderState | undefined
   const history: EndedSession[] = []
+  const favorites = new Set<string>()
   let ids = 0
   const system: ReturnType<SchedulerDependencies['system']> = {
     idle: false,
@@ -42,9 +43,15 @@ export function schedulerFixture(overrides: Partial<SchedulerDependencies> = {})
   const dependencies: SchedulerDependencies = {
     store: {
       load: () => state && structuredClone(state),
-      save(next, ended) {
+      save(next, { ended } = {}) {
         state = structuredClone(next)
         if (ended) history.push(structuredClone(ended))
+      },
+      isFavorite: (id) => favorites.has(id),
+      setFavorite(id, favorite) {
+        if (favorite) favorites.add(id)
+        else favorites.delete(id)
+        return true
       },
     },
     questions: source,

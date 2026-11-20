@@ -1,19 +1,56 @@
-import type { Question } from './question'
+import { BLANK_MARKER, isPermutation } from './question'
+import type { LanguageQuestionType, Question } from './question'
+import type { PracticeSettings } from './review'
+import type { LearningQuestionPlan, LearningStrategy } from './progressive-learning'
 import type { SessionStage } from './scheduling'
+import type { PartOfSpeech } from './part-of-speech'
+import type { StudyMaterial, StudySubject } from './study-material'
 
-export type SessionQuestion = Question & { readonly bankName: string }
+export type SessionQuestion = Question & {
+  readonly bankName: string
+  readonly learning?: LearningQuestionPlan
+}
 export type AnswerInput =
+  | { kind: 'unsure' }
   | { kind: 'multiple-choice'; optionIndex: number }
   | { kind: 'short-answer'; text: string }
+  | { kind: 'fill-in'; values: readonly string[] }
+  | { kind: 'ordering'; order: readonly number[] }
 
-export type AnswerFeedback =
-  | { kind: 'multiple-choice'; selected: number; correct: number; outcome: 'correct' | 'incorrect' }
-  | { kind: 'short-answer'; text: string; referenceAnswer?: string; outcome: 'ungraded' }
+type Outcome = 'correct' | 'incorrect'
+export type AnswerFeedback = { unsure?: true } & (
+  | {
+      kind: 'multiple-choice'
+      selected: number | null
+      correct: number
+      outcome: Outcome
+      optionExplanations?: readonly (string | null)[]
+      optionPartsOfSpeech?: readonly (PartOfSpeech | null)[]
+    }
+  | { kind: 'short-answer'; text: string; referenceAnswer?: string; outcome: Outcome | 'ungraded' }
+  | { kind: 'fill-in'; values: readonly string[]; expected: readonly string[]; outcome: Outcome }
+  | {
+      kind: 'ordering'
+      selected: readonly number[] | null
+      correct: readonly number[]
+      outcome: Outcome
+    }
+)
 
 export interface SubmittedAnswer {
   readonly questionId: string
   readonly feedback: AnswerFeedback
   readonly submittedAt: number
+}
+
+export type SessionStudyMaterial = StudyMaterial & {
+  readonly bankName: string
+  readonly subject?: StudySubject
+}
+
+export interface StudyMaterialTarget {
+  sessionId: string
+  position: number
 }
 
 export interface LearningSession {
@@ -23,19 +60,29 @@ export interface LearningSession {
   readonly questions: readonly SessionQuestion[]
   readonly index: number
   readonly answers: readonly SubmittedAnswer[]
+  readonly practice?: PracticeSettings
+  readonly strategy?: LearningStrategy
+  readonly study?: { readonly materials: readonly SessionStudyMaterial[]; readonly index: number }
 }
 
-export type VisibleQuestion =
-  | {
-      id: string
-      bankName: string
-      prompt: string
-      kind: 'multiple-choice'
-      options: readonly string[]
-    }
-  | { id: string; bankName: string; prompt: string; kind: 'short-answer' }
+export type VisibleQuestion = {
+  id: string
+  bankName: string
+  prompt: string
+  languageType?: LanguageQuestionType
+} & (
+  | { kind: 'multiple-choice'; options: readonly string[] }
+  | { kind: 'short-answer' }
+  | { kind: 'fill-in'; blankCount: number }
+  | { kind: 'ordering'; items: readonly string[] }
+)
 
 export type AnswerView =
+  | ({
+      kind: 'material'
+      total: number
+      material: SessionStudyMaterial
+    } & StudyMaterialTarget)
   | {
       kind: 'question'
       sessionId: string
@@ -43,6 +90,7 @@ export type AnswerView =
       total: number
       question: VisibleQuestion
       feedback?: AnswerFeedback
+      favorite: boolean
     }
   | {
       kind: 'summary'
@@ -59,28 +107,140 @@ export interface SessionTarget {
   questionId: string
 }
 
-export function questionView(session: LearningSession): AnswerView {
-  const question = session.questions[session.index]
-  if (!question) return null
+export function nextStudyMaterial(session: LearningSession) {
+  const study = session.study
+  const material = study?.materials[study.index]
+  return study && material
+    ? {
+        kind: 'material' as const,
+        sessionId: session.id,
+        position: study.index + 1,
+        total: study.materials.length,
+        material,
+      }
+    : undefined
+}
+
+function visibleQuestion(question: SessionQuestion): VisibleQuestion {
   const base = {
     id: question.id,
     bankName: question.bankName,
     prompt: question.prompt,
+    languageType: question.languageType,
   }
+  switch (question.kind) {
+    case 'multiple-choice':
+      return { ...base, kind: question.kind, options: question.options }
+    case 'short-answer':
+      return { ...base, kind: question.kind }
+    case 'fill-in': {
+      let index = 0
+      return {
+        ...base,
+        kind: question.kind,
+        prompt: base.prompt.replaceAll(BLANK_MARKER, () => `［${++index}］`),
+        blankCount: question.blanks.length,
+      }
+    }
+    case 'ordering':
+      return { ...base, kind: question.kind, items: question.items }
+  }
+}
+
+export function questionView(session: LearningSession, favorite = false): AnswerView {
+  const question = session.questions[session.index]
+  if (!question) return null
   return {
     kind: 'question',
     sessionId: session.id,
     position: session.index + 1,
     total: session.questions.length,
-    question:
-      question.kind === 'multiple-choice'
-        ? { ...base, kind: question.kind, options: question.options }
-        : { ...base, kind: question.kind },
+    question: visibleQuestion(question),
+    favorite,
     feedback: session.answers[session.index]?.feedback,
   }
 }
 
+function normalize(text: string): string {
+  return text.normalize('NFKC').trim().replace(/\s+/g, ' ')
+}
+
+function matches(text: string, answers: readonly string[], caseSensitive = false): boolean {
+  const compare = (value: string) => {
+    const normalized = normalize(value)
+    return caseSensitive ? normalized : normalized.toLowerCase()
+  }
+  const submitted = compare(text)
+  return answers.some((answer) => compare(answer) === submitted)
+}
+
+/** Shuffle the display once; persisted sessions keep the same indexes across restart. */
+export function prepareSessionQuestion(
+  question: SessionQuestion,
+  random: () => number,
+): SessionQuestion {
+  if (question.kind !== 'ordering') return question
+  const positions = question.items.map((_, index) => index)
+  for (let index = positions.length - 1; index >= 1; index--) {
+    const other = Math.floor(random() * (index + 1))
+    const currentPosition = positions[index]!
+    positions[index] = positions[other]!
+    positions[other] = currentPosition
+  }
+  if (
+    positions.every(
+      (index, position) =>
+        question.items[index] === question.items[question.correctOrder[position]!],
+    )
+  ) {
+    const different = positions.findIndex(
+      (index) => question.items[index] !== question.items[positions[0]!],
+    )
+    if (different > 0) [positions[0], positions[different]] = [positions[different]!, positions[0]!]
+  }
+  const newPosition = new Map(positions.map((oldIndex, index) => [oldIndex, index]))
+  return {
+    ...question,
+    items: positions.map((index) => question.items[index]!),
+    correctOrder: question.correctOrder.map((index) => newPosition.get(index)!),
+  }
+}
+
+function unsureFeedback(question: SessionQuestion): AnswerFeedback {
+  const base = { unsure: true, outcome: 'incorrect' } as const
+  switch (question.kind) {
+    case 'multiple-choice':
+      return {
+        ...base,
+        kind: question.kind,
+        selected: null,
+        correct: question.correctOptionIndex,
+        optionExplanations: question.optionExplanations,
+        ...(question.optionPartsOfSpeech
+          ? { optionPartsOfSpeech: question.optionPartsOfSpeech }
+          : {}),
+      }
+    case 'short-answer':
+      return {
+        ...base,
+        kind: question.kind,
+        text: '',
+        referenceAnswer: question.referenceAnswer ?? question.acceptedAnswers?.[0],
+      }
+    case 'fill-in':
+      return {
+        ...base,
+        kind: question.kind,
+        values: [],
+        expected: question.blanks.map((answers) => answers[0]!),
+      }
+    case 'ordering':
+      return { ...base, kind: question.kind, selected: null, correct: question.correctOrder }
+  }
+}
+
 export function gradeAnswer(question: SessionQuestion, answer: AnswerInput): AnswerFeedback | null {
+  if (answer.kind === 'unsure') return unsureFeedback(question)
   if (question.kind === 'multiple-choice' && answer.kind === 'multiple-choice') {
     if (
       !Number.isInteger(answer.optionIndex) ||
@@ -93,19 +253,49 @@ export function gradeAnswer(question: SessionQuestion, answer: AnswerInput): Ans
       selected: answer.optionIndex,
       correct: question.correctOptionIndex,
       outcome: answer.optionIndex === question.correctOptionIndex ? 'correct' : 'incorrect',
+      ...(question.optionExplanations ? { optionExplanations: question.optionExplanations } : {}),
+      ...(question.optionPartsOfSpeech
+        ? { optionPartsOfSpeech: question.optionPartsOfSpeech }
+        : {}),
     }
   }
-  if (
-    question.kind === 'short-answer' &&
-    answer.kind === 'short-answer' &&
-    answer.text.trim() &&
-    answer.text.length <= 10_000
-  ) {
+  if (question.kind === 'short-answer' && answer.kind === 'short-answer') {
+    const text = answer.text.trim()
+    if (!text || answer.text.length > 10_000) return null
+    const accepted = question.acceptedAnswers
     return {
       kind: question.kind,
-      text: answer.text.trim(),
-      referenceAnswer: question.referenceAnswer,
-      outcome: 'ungraded',
+      text,
+      referenceAnswer: question.referenceAnswer ?? accepted?.[0],
+      outcome: accepted
+        ? matches(text, accepted, question.languageType === 'grammar-correction')
+          ? 'correct'
+          : 'incorrect'
+        : 'ungraded',
+    }
+  }
+  if (question.kind === 'fill-in' && answer.kind === 'fill-in') {
+    const values = answer.values.map((text) => text.trim())
+    if (values.length !== question.blanks.length || values.some((text) => !text)) return null
+    const correct = question.blanks.every((expected, index) => matches(values[index]!, expected))
+    return {
+      kind: question.kind,
+      values,
+      expected: question.blanks.map((expected) => expected[0]!),
+      outcome: correct ? 'correct' : 'incorrect',
+    }
+  }
+  if (question.kind === 'ordering' && answer.kind === 'ordering') {
+    if (!isPermutation(answer.order, question.items.length)) return null
+    // Identical visible tokens may be exchanged without changing the answer.
+    const correct = question.correctOrder.every(
+      (index, position) => question.items[index] === question.items[answer.order[position]!],
+    )
+    return {
+      kind: question.kind,
+      selected: answer.order,
+      correct: question.correctOrder,
+      outcome: correct ? 'correct' : 'incorrect',
     }
   }
   return null

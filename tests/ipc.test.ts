@@ -123,6 +123,17 @@ describe('app IPC', () => {
       ok: false,
       error: { code: 'FORBIDDEN' },
     })
+    expect(
+      invoke(IPC_CHANNELS.advanceStudyMaterial, { sessionId: 'session', position: 1 }),
+    ).toMatchObject({
+      error: { code: 'FORBIDDEN' },
+    })
+    expect(
+      invoke(IPC_CHANNELS.saveReminderSettings, {
+        ...scheduler.status().settings,
+        sessionMode: 'unknown',
+      }),
+    ).toMatchObject({ error: { code: 'INVALID_ARGUMENTS' } })
     expect(scheduler.status().settings.intervalMinutes).toBe(30)
   })
 
@@ -132,6 +143,11 @@ describe('app IPC', () => {
     register({ getVersion: () => '0.1.0', platform: 'darwin' }, () => true, scheduler)
     scheduler.start()
     try {
+      expect(
+        invoke(IPC_CHANNELS.advanceStudyMaterial, { sessionId: 'session', position: 0 }),
+      ).toMatchObject({
+        error: { code: 'INVALID_ARGUMENTS' },
+      })
       invoke(IPC_CHANNELS.startLearning)
       const original = invoke(IPC_CHANNELS.getAnswerView)
       invoke(IPC_CHANNELS.startLearning)

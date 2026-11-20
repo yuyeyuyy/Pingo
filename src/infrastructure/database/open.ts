@@ -48,6 +48,109 @@ const migrations = [
     outcome TEXT NOT NULL CHECK (outcome IN ('completed', 'skipped')),
     payload TEXT NOT NULL CHECK (json_valid(payload))
   ) STRICT`,
+  // Keep IDs and insertion order so saved sessions and existing navigation remain valid.
+  `ALTER TABLE question_banks ADD COLUMN template TEXT NOT NULL DEFAULT 'basic'
+    CHECK (template IN ('basic', 'language'));
+
+  CREATE TABLE questions_v4 (
+    id TEXT PRIMARY KEY NOT NULL,
+    bank_id TEXT NOT NULL REFERENCES question_banks(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('multiple-choice', 'short-answer', 'fill-in', 'ordering')),
+    prompt TEXT NOT NULL CHECK (length(trim(prompt)) > 0),
+    content_json TEXT NOT NULL CHECK (json_valid(content_json) AND json_type(content_json) = 'object')
+  ) STRICT;
+
+  INSERT INTO questions_v4 (rowid, id, bank_id, kind, prompt, content_json)
+    SELECT rowid, id, bank_id, kind, prompt,
+      CASE
+        WHEN kind = 'multiple-choice' THEN
+          json_object('options', json(options_json), 'correctOptionIndex', correct_option_index)
+        WHEN reference_answer IS NOT NULL THEN json_object('referenceAnswer', reference_answer)
+        ELSE '{}'
+      END
+    FROM questions;
+
+  DROP TABLE questions;
+  ALTER TABLE questions_v4 RENAME TO questions;
+  CREATE INDEX questions_bank_id ON questions (bank_id)`,
+  `CREATE TABLE wrong_questions (
+    question_id TEXT PRIMARY KEY NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+    consecutive_correct INTEGER NOT NULL DEFAULT 0 CHECK (consecutive_correct IN (0, 1))
+  ) STRICT;
+
+  CREATE TABLE favorite_questions (
+    question_id TEXT PRIMARY KEY NOT NULL REFERENCES questions(id) ON DELETE CASCADE
+  ) STRICT`,
+  `ALTER TABLE questions ADD COLUMN difficulty INTEGER CHECK (difficulty BETWEEN 1 AND 5);
+  ALTER TABLE questions ADD COLUMN concept_key TEXT CHECK (length(concept_key) BETWEEN 1 AND 160);
+  ALTER TABLE questions ADD COLUMN effective_difficulty INTEGER GENERATED ALWAYS AS (
+    coalesce(difficulty, CASE
+      WHEN json_extract(content_json, '$.languageType') = 'word-to-meaning' THEN 1
+      WHEN kind = 'multiple-choice' THEN 2
+      WHEN kind = 'ordering' THEN 4
+      ELSE 3 END)
+  ) VIRTUAL;
+  CREATE INDEX questions_bank_difficulty ON questions (bank_id, effective_difficulty);
+
+  CREATE TABLE question_learning (
+    question_id TEXT PRIMARY KEY NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+    step INTEGER NOT NULL CHECK (step BETWEEN 0 AND 5),
+    due_at INTEGER NOT NULL,
+    last_attempt_at INTEGER NOT NULL
+  ) STRICT;
+  CREATE INDEX question_learning_due ON question_learning (due_at);
+
+  CREATE TABLE bank_learning_profiles (
+    bank_id TEXT PRIMARY KEY NOT NULL REFERENCES question_banks(id) ON DELETE CASCADE,
+    level INTEGER NOT NULL CHECK (level BETWEEN 1 AND 5),
+    epoch INTEGER NOT NULL CHECK (epoch >= 0),
+    samples_json TEXT NOT NULL CHECK (json_valid(samples_json) AND json_type(samples_json) = 'array' AND json_array_length(samples_json) <= 10)
+  ) STRICT`,
+  `CREATE TABLE study_materials (
+    id INTEGER PRIMARY KEY,
+    bank_id TEXT NOT NULL REFERENCES question_banks(id) ON DELETE CASCADE,
+    key TEXT NOT NULL CHECK (length(key) BETWEEN 1 AND 160),
+    title TEXT NOT NULL CHECK (length(title) BETWEEN 1 AND 200),
+    explanation TEXT NOT NULL CHECK (length(explanation) BETWEEN 1 AND 10000),
+    examples_json TEXT NOT NULL CHECK (json_valid(examples_json) AND json_type(examples_json) = 'array' AND json_array_length(examples_json) <= 5),
+    UNIQUE (bank_id, key)
+  ) STRICT;
+  ALTER TABLE questions ADD COLUMN material_id INTEGER REFERENCES study_materials(id) ON DELETE SET NULL;
+  CREATE INDEX questions_study_material ON questions (material_id) WHERE material_id IS NOT NULL`,
+  `CREATE INDEX questions_bank_vocabulary_concept ON questions (bank_id, concept_key)
+    WHERE kind = 'multiple-choice' AND concept_key IS NOT NULL`,
+  `CREATE TABLE study_material_progress (
+    bank_id TEXT NOT NULL REFERENCES question_banks(id) ON DELETE CASCADE,
+    subject_key TEXT NOT NULL,
+    last_seen_at INTEGER NOT NULL,
+    PRIMARY KEY (bank_id, subject_key)
+  ) STRICT;
+
+  WITH previous_sessions AS (
+    SELECT payload, ended_at AS seen_at, json_array_length(payload, '$.study.materials') - 1 AS last_index
+    FROM learning_history
+    WHERE json_type(payload, '$.study.materials') = 'array'
+    UNION ALL
+    SELECT json_extract(payload, '$.session'),
+      json_extract(payload, '$.session.startedAt'),
+      json_extract(payload, '$.session.study.index')
+    FROM reminder_state
+    WHERE json_type(payload, '$.session.study.materials') = 'array'
+      AND (json_extract(payload, '$.session.stage') <> 'pending'
+        OR json_extract(payload, '$.session.study.index') > 0)
+  )
+  INSERT INTO study_material_progress (bank_id, subject_key, last_seen_at)
+  SELECT m.bank_id, pingo_study_subject(b.template, m.title, m.key), max(s.seen_at)
+  FROM previous_sessions s
+  JOIN json_each(s.payload, '$.questions') saved
+  JOIN questions q ON q.id = json_extract(saved.value, '$.id')
+  JOIN study_materials m ON m.id = q.material_id
+  JOIN question_banks b ON b.id = m.bank_id
+  WHERE s.seen_at IS NOT NULL AND EXISTS (
+    SELECT 1 FROM json_each(s.payload, '$.study.materials') card
+    WHERE card.key <= s.last_index AND json_extract(card.value, '$.key') = m.key
+  )
+  GROUP BY m.bank_id, pingo_study_subject(b.template, m.title, m.key)`,
 ]
 
 function migrate(database: DatabaseSync): void {
@@ -74,6 +177,11 @@ export function openDatabase(userDataDirectory: string): DatabaseSync {
     timeout: 2_000,
   })
   try {
+    database.function('pingo_study_subject', { deterministic: true }, (template, title, key) =>
+      template === 'language'
+        ? String(title).normalize('NFKC').trim().toLowerCase().replace(/\s+/g, ' ')
+        : String(key),
+    )
     migrate(database)
     return database
   } catch (error) {

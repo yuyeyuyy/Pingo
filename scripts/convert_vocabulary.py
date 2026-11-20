@@ -287,10 +287,10 @@ def validate(questions: list[dict], entries: list[Entry]) -> list[dict]:
 
 
 def import_limits() -> dict[str, int]:
-    """Read Pingo's source of truth instead of silently duplicating its constants."""
+    """Read Pingo field limits and retain the converter's existing shard size."""
     source = (ROOT / 'src/shared/question-bank.ts').read_text()
-    limits = {}
-    for key in ('name', 'prompt', 'referenceAnswer', 'option', 'minOptions', 'maxOptions', 'importQuestions', 'importBytes'):
+    limits = {'importQuestions': 3_000}  # Export batching preference, not an importer limit.
+    for key in ('name', 'prompt', 'referenceAnswer', 'option', 'minOptions', 'maxOptions', 'importBytes'):
         match = re.search(rf'\b{key}:\s*([\d_]+(?:\s*\*\s*[\d_]+)*)\s*,', source)
         if not match:
             raise ValueError(f'无法读取 Pingo 限制 {key}，请检查字段规范是否已改变。')

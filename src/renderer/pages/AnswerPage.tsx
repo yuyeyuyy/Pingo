@@ -1,21 +1,23 @@
+import { Star } from 'lucide-react'
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import type { PingoApi } from '../../shared/ipc'
+import { LANGUAGE_QUESTION_TYPES } from '../../shared/question-bank'
 import { SNOOZE_MINUTES } from '../../shared/reminders'
 import type { AnswerView } from '../../shared/reminders'
 import { desktopError, useDesktopValue } from '../components/reminders/useDesktopValue'
+import {
+  AnswerFields,
+  FeedbackNote,
+  initialAnswer,
+  readyToSubmit,
+} from '../components/reminders/AnswerFields'
 
 type QuestionView = Extract<AnswerView, { kind: 'question' }>
 
-function QuestionStep({ api, view }: { api: PingoApi; view: QuestionView }) {
-  const { question, feedback, position, total } = view
-  const [option, setOption] = useState<number>()
-  const [text, setText] = useState('')
-  const [minutes, setMinutes] = useState(10)
+function useStepAction() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const target = { sessionId: view.sessionId, questionId: question.id }
-  const final = position === total
 
   async function run(action: () => Promise<unknown>) {
     if (busy) return
@@ -29,18 +31,114 @@ function QuestionStep({ api, view }: { api: PingoApi; view: QuestionView }) {
       setBusy(false)
     }
   }
+  return { busy, error, run }
+}
+
+function SnoozeControls({ busy, onSnooze }: { busy: boolean; onSnooze(minutes: number): void }) {
+  const [minutes, setMinutes] = useState(10)
+  return (
+    <div className="bank-actions">
+      <label className="bank-field">
+        <select
+          aria-label="稍后提醒时长"
+          value={minutes}
+          disabled={busy}
+          onChange={(event) => setMinutes(Number(event.target.value))}
+        >
+          {SNOOZE_MINUTES.map((value) => (
+            <option key={value} value={value}>
+              {value === 60 ? '1 小时后' : `${value} 分钟后`}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button
+        type="button"
+        className="secondary-button"
+        disabled={busy}
+        onClick={() => onSnooze(minutes)}
+      >
+        稍后提醒
+      </button>
+    </div>
+  )
+}
+
+function MaterialStep({
+  api,
+  view,
+}: {
+  api: PingoApi
+  view: Extract<AnswerView, { kind: 'material' }>
+}) {
+  const { sessionId, position, total, material } = view
+  const { busy, error, run } = useStepAction()
+  return (
+    <main className="learning-window">
+      <header className="learning-header">
+        <div>
+          <h1>学习资料</h1>
+          <p className="bank-hint">{material.bankName}</p>
+        </div>
+        <div className="learning-header-actions">
+          <span aria-label={`第 ${position} 份，共 ${total} 份资料`}>
+            {position} / {total}
+          </span>
+        </div>
+      </header>
+      <div className="learning-form">
+        <section className="learning-body study-material" aria-labelledby="material-title">
+          <h2 id="material-title">{material.title}</h2>
+          <p>{material.explanation}</p>
+          {material.examples.length > 0 && (
+            <div className="study-material-examples">
+              <h3>示例</h3>
+              <ul>
+                {material.examples.map(({ text, translation }, index) => (
+                  <li className="learning-feedback" key={index}>
+                    <p>{text}</p>
+                    {translation && <p className="bank-hint">{translation}</p>}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {error && (
+            <p className="bank-error" role="alert">
+              {error}
+            </p>
+          )}
+        </section>
+        <footer className="learning-footer">
+          <SnoozeControls
+            busy={busy}
+            onSnooze={(minutes) => run(() => api.snoozeLearning({ sessionId, minutes }))}
+          />
+          <button
+            type="button"
+            className="primary-button"
+            disabled={busy}
+            onClick={() => run(() => api.advanceStudyMaterial({ sessionId, position }))}
+          >
+            {position === total ? '开始练习' : '下一份资料'}
+          </button>
+        </footer>
+      </div>
+    </main>
+  )
+}
+
+function QuestionStep({ api, view }: { api: PingoApi; view: QuestionView }) {
+  const { question, feedback, position, total } = view
+  const [answer, setAnswer] = useState(() => initialAnswer(question))
+  const { busy, error, run } = useStepAction()
+  const target = { sessionId: view.sessionId, questionId: question.id }
+  const final = position === total
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (feedback) {
-      void run(() => api.advanceAnswer(target))
-    } else if (question.kind === 'short-answer') {
-      void run(() => api.submitAnswer({ ...target, answer: { kind: 'short-answer', text } }))
-    } else if (option !== undefined) {
-      void run(() =>
-        api.submitAnswer({ ...target, answer: { kind: 'multiple-choice', optionIndex: option } }),
-      )
-    }
+    if (feedback) void run(() => api.advanceAnswer(target))
+    else if (readyToSubmit(answer)) void run(() => api.submitAnswer({ ...target, answer }))
   }
 
   return (
@@ -48,68 +146,58 @@ function QuestionStep({ api, view }: { api: PingoApi; view: QuestionView }) {
       <header className="learning-header">
         <div>
           <h1>学习练习</h1>
-          <p className="bank-hint">{question.bankName}</p>
+          <p className="bank-hint">
+            {question.bankName}
+            {question.languageType && ` · ${LANGUAGE_QUESTION_TYPES[question.languageType].label}`}
+          </p>
         </div>
-        <span aria-label={`第 ${position} 题，共 ${total} 题`}>
-          {position} / {total}
-        </span>
+        <div className="learning-header-actions">
+          <button
+            type="button"
+            className="secondary-button button-with-icon"
+            aria-pressed={view.favorite}
+            disabled={busy}
+            onClick={() =>
+              run(() => api.setAnswerFavorite({ ...target, favorite: !view.favorite }))
+            }
+          >
+            <Star size={15} fill={view.favorite ? 'currentColor' : 'none'} aria-hidden="true" />
+            {view.favorite ? '取消收藏' : '收藏'}
+          </button>
+          <span aria-label={`第 ${position} 题，共 ${total} 题`}>
+            {position} / {total}
+          </span>
+        </div>
       </header>
       <form className="learning-form" onSubmit={submit}>
         <div className="learning-body">
           <h2>{question.prompt}</h2>
-          {question.kind === 'multiple-choice' ? (
-            <fieldset className="learning-options" disabled={busy || !!feedback}>
-              <legend className="bank-hint">请选择一项</legend>
-              {question.options.map((label, index) => (
-                <label
-                  key={index}
-                  className="learning-option"
-                  data-correct={feedback?.kind === 'multiple-choice' && feedback.correct === index}
-                >
-                  <input
-                    type="radio"
-                    name="answer"
-                    checked={
-                      (feedback?.kind === 'multiple-choice' ? feedback.selected : option) === index
-                    }
-                    onChange={() => setOption(index)}
-                  />
-                  <span>{label}</span>
-                </label>
-              ))}
-            </fieldset>
-          ) : (
-            <label className="bank-field">
-              你的答案
-              <textarea
-                required
-                rows={4}
-                maxLength={10_000}
-                disabled={busy || !!feedback}
-                value={feedback?.kind === 'short-answer' ? feedback.text : text}
-                onChange={(event) => setText(event.target.value)}
-              />
-            </label>
-          )}
-          {feedback && (
-            <div className="learning-feedback" role="status">
-              {feedback.kind === 'multiple-choice' && question.kind === 'multiple-choice' ? (
-                <>
-                  <strong>{feedback.outcome === 'correct' ? '回答正确' : '回答错误'}</strong>
-                  <p>正确答案：{question.options[feedback.correct]}</p>
-                </>
-              ) : (
-                feedback.kind === 'short-answer' && (
-                  <>
-                    <strong>已记录，待自评</strong>
-                    <p>
-                      {feedback.referenceAnswer
-                        ? `参考答案：${feedback.referenceAnswer}`
-                        : '这道题暂无参考答案。'}
-                    </p>
-                  </>
-                )
-              )}
+          <AnswerFields
+            question={question}
+            feedback={feedback}
+            answer={answer}
+            onAnswer={setAnswer}
+            busy={busy}
+          />
+          {feedback && <FeedbackNote question={question} feedback={feedback} />}
+          {feedback?.outcome === 'ungraded' && (
+            <div className="bank-actions" aria-label="自评结果">
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={busy}
+                onClick={() => run(() => api.rateAnswer({ ...target, correct: true }))}
+              >
+                自评答对
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={busy}
+                onClick={() => run(() => api.rateAnswer({ ...target, correct: false }))}
+              >
+                自评答错
+              </button>
             </div>
           )}
           {error && (
@@ -119,41 +207,33 @@ function QuestionStep({ api, view }: { api: PingoApi; view: QuestionView }) {
           )}
         </div>
         <footer className="learning-footer">
+          <SnoozeControls
+            busy={busy}
+            onSnooze={(minutes) =>
+              run(() => api.snoozeLearning({ sessionId: view.sessionId, minutes }))
+            }
+          />
           <div className="bank-actions">
-            <label className="bank-field">
-              <select
-                aria-label="稍后提醒时长"
-                value={minutes}
+            {!feedback && (
+              <button
+                type="button"
+                className="secondary-button"
                 disabled={busy}
-                onChange={(event) => setMinutes(Number(event.target.value))}
+                onClick={() =>
+                  run(() => api.submitAnswer({ ...target, answer: { kind: 'unsure' } }))
+                }
               >
-                {SNOOZE_MINUTES.map((value) => (
-                  <option key={value} value={value}>
-                    {value === 60 ? '1 小时后' : `${value} 分钟后`}
-                  </option>
-                ))}
-              </select>
-            </label>
+                不清楚
+              </button>
+            )}
             <button
-              type="button"
-              className="secondary-button"
-              disabled={busy}
-              onClick={() => run(() => api.snoozeLearning({ sessionId: view.sessionId, minutes }))}
+              type="submit"
+              className="primary-button"
+              disabled={busy || (!feedback && !readyToSubmit(answer))}
             >
-              稍后提醒
+              {feedback ? (final ? '完成学习' : '下一题') : '提交答案'}
             </button>
           </div>
-          <button
-            type="submit"
-            className="primary-button"
-            disabled={
-              busy ||
-              (!feedback &&
-                (question.kind === 'multiple-choice' ? option === undefined : !text.trim()))
-            }
-          >
-            {feedback ? (final ? '完成学习' : '下一题') : '提交答案'}
-          </button>
         </footer>
       </form>
     </main>
@@ -164,6 +244,9 @@ export function AnswerPage() {
   const api = window.pingo
   const { value, error } = useDesktopValue(api?.getAnswerView, api?.onAnswerView)
 
+  if (value?.kind === 'material' && api) {
+    return <MaterialStep key={`${value.sessionId}:${value.position}`} api={api} view={value} />
+  }
   if (value?.kind === 'question' && api) {
     return <QuestionStep key={`${value.sessionId}:${value.position}`} api={api} view={value} />
   }

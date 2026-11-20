@@ -1,19 +1,42 @@
 import type { Question, QuestionBank } from '../../domain/question'
+import type { PracticeSource } from '../../domain/review'
+import type { StudyMaterial } from '../../domain/study-material'
+import type { QuestionPage } from '../../shared/question-bank'
 import {
   bankName,
+  bankTemplate,
   id,
   object,
+  parseBankAppend,
   parseBankImport,
   questionDraft,
+  questionPage,
   QuestionBankError,
 } from './validation'
 
 export interface QuestionBankRepository {
   listBanks(): readonly QuestionBank[]
-  createBank(bank: QuestionBank, questions: readonly Question[]): void
+  getBank(bankId: string): QuestionBank | undefined
+  createBank(
+    bank: QuestionBank,
+    questions: readonly Question[],
+    materials?: readonly StudyMaterial[],
+  ): void
+  appendQuestions(
+    bankId: string,
+    questions: readonly Question[],
+    materials?: readonly StudyMaterial[],
+  ): boolean
   renameBank(bank: QuestionBank): boolean
   deleteBank(bankId: string): boolean
   listQuestions(bankId: string): readonly Question[] | undefined
+  queryQuestions(
+    bankId: string,
+    query: string,
+    page: number,
+    source: PracticeSource,
+  ): QuestionPage | undefined
+  removeFavorite(bankId: string, questionId: string): void
   createQuestion(bankId: string, question: Question): boolean
   updateQuestion(bankId: string, question: Question): boolean
   deleteQuestion(bankId: string, questionId: string): boolean
@@ -24,18 +47,21 @@ function missing(record: '题库' | '题目'): never {
 }
 
 export function createQuestionBankService(repository: QuestionBankRepository, newId: () => string) {
+  const requireBank = (value: unknown) => repository.getBank(id(value)) ?? missing('题库')
+
   return {
     listBanks: () => repository.listBanks(),
 
     createBank(input: unknown): QuestionBank {
-      const bank = { id: newId(), name: bankName(object(input).name) }
+      const { name, template } = object(input)
+      const bank = { id: newId(), name: bankName(name), template: bankTemplate(template) }
       repository.createBank(bank, [])
       return bank
     },
 
     renameBank(input: unknown): QuestionBank {
       const { bankId, name } = object(input)
-      const bank = { id: id(bankId), name: bankName(name) }
+      const bank = { ...requireBank(bankId), name: bankName(name) }
       if (!repository.renameBank(bank)) missing('题库')
       return bank
     },
@@ -48,17 +74,29 @@ export function createQuestionBankService(repository: QuestionBankRepository, ne
       return repository.listQuestions(id(object(input).bankId)) ?? missing('题库')
     },
 
+    queryQuestions(input: unknown): QuestionPage {
+      const { bankId, query, page, source } = questionPage(input)
+      return repository.queryQuestions(bankId, query, page, source) ?? missing('题库')
+    },
+
+    removeFavorite(input: unknown): void {
+      const { bankId, questionId } = object(input)
+      repository.removeFavorite(id(bankId), id(questionId))
+    },
+
     createQuestion(input: unknown): Question {
       const { bankId, question } = object(input)
-      const created = { ...questionDraft(question), id: newId() }
-      if (!repository.createQuestion(id(bankId), created)) missing('题库')
+      const bank = requireBank(bankId)
+      const created = { ...questionDraft(question, bank.template), id: newId() }
+      if (!repository.createQuestion(bank.id, created)) missing('题库')
       return created
     },
 
     updateQuestion(input: unknown): Question {
       const { bankId, questionId, question } = object(input)
-      const updated = { ...questionDraft(question), id: id(questionId) }
-      if (!repository.updateQuestion(id(bankId), updated)) missing('题目')
+      const bank = requireBank(bankId)
+      const updated = { ...questionDraft(question, bank.template), id: id(questionId) }
+      if (!repository.updateQuestion(bank.id, updated)) missing('题目')
       return updated
     },
 
@@ -68,13 +106,33 @@ export function createQuestionBankService(repository: QuestionBankRepository, ne
     },
 
     importQuestionBank(json: unknown): QuestionBank {
-      const { name, questions } = parseBankImport(json)
-      const bank = { id: newId(), name }
+      const { name, questions, materials } = parseBankImport(json)
+      const bank: QuestionBank = { id: newId(), name, template: 'basic' }
       repository.createBank(
         bank,
         questions.map((question) => ({ ...question, id: newId() })),
+        materials,
       )
       return bank
+    },
+
+    appendQuestionImport(input: unknown) {
+      const { bankId, json } = object(input)
+      const bank = requireBank(bankId)
+      const { questions, materials } = parseBankAppend(json, bank.template)
+      if (
+        !repository.appendQuestions(
+          bank.id,
+          questions.map((question) => ({ ...question, id: newId() })),
+          materials,
+        )
+      ) {
+        missing('题库')
+      }
+      return {
+        added: questions.length,
+        ...(materials.length ? { materials: materials.length } : {}),
+      }
     },
   }
 }

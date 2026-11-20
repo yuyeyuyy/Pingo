@@ -1,0 +1,103 @@
+{
+  "materials": [
+    {
+      "key": "apple:n:fruit",
+      "title": "apple",
+      "explanation": "名词。苹果。",
+      "examples": [{ "text": "She ate an apple.", "translation": "她吃了一个苹果。" }]
+    },
+    {
+      "key": "borrow:v:take-on-loan",
+      "title": "borrow",
+      "explanation": "动词。借入。常用搭配是 borrow something from someone。",
+      "examples": [
+        {
+          "text": "I borrowed a book from the library.",
+          "translation": "我从图书馆借了一本书。"
+        }
+      ]
+    },
+    {
+      "key": "mitigate:v:reduce-severity",
+      "title": "mitigate",
+      "explanation": "动词。减轻或缓和问题的严重程度。",
+      "examples": [
+        {
+          "text": "Trees can help mitigate urban heat.",
+          "translation": "树木有助于缓解城市热岛效应。"
+        }
+      ]
+    }
+  ],
+  "questions": [
+    {
+      "kind": "multiple-choice",
+      "languageType": "word-to-meaning",
+      "difficulty": 1,
+      "conceptKey": "apple:n:fruit",
+      "materialKey": "apple:n:fruit",
+      "prompt": "apple 的中文释义是什么？",
+      "options": ["苹果", "梨", "葡萄"],
+      "correctOptionIndex": 0,
+      "optionExplanations": ["apple", "pear", "grape"],
+      "optionPartsOfSpeech": ["n", "n", "n"]
+    },
+    {
+      "kind": "multiple-choice",
+      "languageType": "meaning-to-word",
+      "difficulty": 2,
+      "conceptKey": "borrow:v:take-on-loan",
+      "materialKey": "borrow:v:take-on-loan",
+      "prompt": "请选择「借入」对应的英文。",
+      "options": ["lend", "borrow", "return"],
+      "correctOptionIndex": 1,
+      "optionExplanations": ["借出", "借入", "归还"],
+      "optionPartsOfSpeech": ["v", "v", "v"]
+    },
+    {
+      "kind": "multiple-choice",
+      "languageType": "word-to-meaning",
+      "difficulty": 4,
+      "conceptKey": "mitigate:v:reduce-severity",
+      "materialKey": "mitigate:v:reduce-severity",
+      "prompt": "mitigate 的主要释义是什么？",
+      "options": ["减轻", "维持", "证实"],
+      "correctOptionIndex": 0,
+      "optionExplanations": ["mitigate", "maintain", "confirm"],
+      "optionPartsOfSpeech": ["v", "v", "v"]
+    },
+    {
+      "kind": "short-answer",
+      "languageType": "word-spelling",
+      "difficulty": 5,
+      "conceptKey": "mitigate:v:reduce-severity",
+      "materialKey": "mitigate:v:reduce-severity",
+      "prompt": "拼写本词表中表示「减轻、缓和」的英文单词。",
+      "acceptedAnswers": ["mitigate"]
+    },
+    {
+      "kind": "short-answer",
+      "languageType": "word-spelling",
+      "difficulty": 2,
+      "conceptKey": "apple:n:fruit",
+      "materialKey": "apple:n:fruit",
+      "prompt": "拼写「苹果」对应的英文单词。",
+      "acceptedAnswers": ["apple"]
+    },
+    {
+      "kind": "fill-in",
+      "languageType": "grammar-fill-in",
+      "difficulty": 3,
+      "prompt": "She {{blank}} a teacher, and I {{blank}} a student.",
+      "blanks": [["is"], ["am"]]
+    },
+    {
+      "kind": "ordering",
+      "languageType": "sentence-ordering",
+      "difficulty": 4,
+      "prompt": "将词语排列成句。",
+      "items": ["apples", "like", "I"],
+      "correctOrder": [2, 1, 0]
+    }
+  ]
+}

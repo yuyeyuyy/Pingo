@@ -49,13 +49,23 @@ export function App() {
             )
           })}
         </nav>
-        {(reminders?.pendingSessionId || reminders?.notice === 'empty-bank') && (
+        {(reminders?.pendingSessionId || reminders?.notice) && (
           <button
             className="secondary-button sidebar-reminder"
             type="button"
-            onClick={() => navigate(reminders.pendingSessionId ? 'settings' : 'question-bank')}
+            onClick={() =>
+              navigate(reminders.notice === 'empty-bank' ? 'question-bank' : 'settings')
+            }
           >
-            {reminders.pendingSessionId ? '有一轮学习待开始' : '题库暂无题目'}
+            {reminders.pendingSessionId
+              ? '有一轮学习待开始'
+              : reminders.notice === 'empty-favorites'
+                ? '收藏本暂无题目'
+                : reminders.notice === 'nothing-due'
+                  ? '暂无可安排的题目'
+                  : reminders.notice === 'empty-study'
+                    ? '暂无带学习资料的题目'
+                    : '所选题库暂无题目'}
           </button>
         )}
         <div className="sidebar-footer">

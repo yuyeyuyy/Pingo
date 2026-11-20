@@ -91,3 +91,100 @@ it('rolls back the bank and earlier rows when a database insert fails mid-import
   expect(banks.listBanks()).toEqual([])
   expect(database.prepare('SELECT id FROM questions').all()).toEqual([])
 })
+
+it('appends to the selected template bank, preserving existing questions and rolling back invalid imports', () => {
+  const banks = service()
+  const language = banks.createBank({ name: '英文', template: 'language' })
+  const basic = banks.createBank({ name: '旧题' })
+  const vocabulary = {
+    ...choice,
+    languageType: 'word-to-meaning',
+    optionExplanations: ['zero', null, 'one hundred'],
+    optionPartsOfSpeech: ['num', null, 'num'],
+  }
+  const item = banks.createQuestion({ bankId: language.id, question: written })
+  expect(
+    banks.appendQuestionImport({
+      bankId: language.id,
+      json: JSON.stringify({ name: '文件内标题', questions: [vocabulary] }),
+    }),
+  ).toEqual({ added: 1 })
+  expect(banks.listBanks()).toEqual([language, basic])
+  expect(banks.listQuestions({ bankId: language.id })).toMatchObject([item, vocabulary])
+  expect(() =>
+    banks.appendQuestionImport({
+      bankId: basic.id,
+      json: JSON.stringify({ questions: [vocabulary] }),
+    }),
+  ).toThrow('需要导入语言学习题库')
+  expect(() =>
+    banks.appendQuestionImport({
+      bankId: language.id,
+      json: JSON.stringify({ questions: [written, { ...vocabulary, optionExplanations: ['零'] }] }),
+    }),
+  ).toThrow('第 2 题')
+  expect(banks.listQuestions({ bankId: basic.id })).toEqual([])
+  expect(banks.listQuestions({ bankId: language.id })).toHaveLength(2)
+
+  const question = banks.listQuestions({ bankId: language.id })[1]!
+  expect(() =>
+    banks.updateQuestion({
+      bankId: language.id,
+      questionId: question.id,
+      question: { ...vocabulary, optionPartsOfSpeech: ['num'] },
+    }),
+  ).toThrow('词性数量')
+  expect(() =>
+    banks.updateQuestion({
+      bankId: language.id,
+      questionId: question.id,
+      question: { ...vocabulary, optionPartsOfSpeech: ['nounish', null, null] },
+    }),
+  ).toThrow('词性无效')
+  banks.updateQuestion({
+    bankId: language.id,
+    questionId: question.id,
+    question: {
+      ...vocabulary,
+      optionExplanations: [null, 'ten', null],
+      optionPartsOfSpeech: [null, '数词', 'NUM.'],
+    },
+  })
+  expect(banks.listQuestions({ bankId: language.id })[1]).toMatchObject({
+    optionExplanations: [null, 'ten', null],
+    optionPartsOfSpeech: [null, 'num', 'num'],
+  })
+})
+
+it('accepts more than 3000 questions and searches and paginates within one bank', () => {
+  const banks = service()
+  const target = banks.createBank({ name: '大量题目' })
+  const another = banks.createBank({ name: '其他题库' })
+  banks.createQuestion({ bankId: another.id, question: { ...written, prompt: 'Résumé 3100' } })
+  const questions = Array.from({ length: 3_101 }, (_, index) => ({
+    ...written,
+    prompt: `Résumé ${index}`,
+  }))
+  expect(
+    banks.appendQuestionImport({ bankId: target.id, json: JSON.stringify({ questions }) }),
+  ).toEqual({ added: 3_101 })
+  const last = banks.queryQuestions({ bankId: target.id, query: ' RÉSUMÉ ', page: 999 })
+  expect(last).toMatchObject({ total: 3_101, page: 62 })
+  expect(last.items.map((question) => question.prompt)).toEqual(['Résumé 3100'])
+  expect(banks.queryQuestions({ bankId: target.id, query: 'Résumé 3100', page: 0 }).total).toBe(1)
+})
+
+it('rolls back an append when SQLite rejects a row after an earlier row succeeded', () => {
+  const banks = service()
+  const target = banks.createBank({ name: '事务题库' })
+  const existing = banks.createQuestion({ bankId: target.id, question: written })
+  const ids = [randomUUID(), existing.id]
+  const appending = service(() => ids.shift() as ReturnType<typeof randomUUID>)
+  expect(() =>
+    appending.appendQuestionImport({
+      bankId: target.id,
+      json: JSON.stringify({ questions: [choice, written] }),
+    }),
+  ).toThrow(/UNIQUE constraint/)
+  expect(banks.listQuestions({ bankId: target.id })).toEqual([existing])
+})

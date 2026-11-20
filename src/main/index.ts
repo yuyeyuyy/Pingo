@@ -4,7 +4,9 @@ import { join } from 'node:path'
 import { createQuestionBankService } from '../application/question-bank/service'
 import { SchedulerService } from '../application/reminders/scheduler'
 import { openDatabase } from '../infrastructure/database/open'
+import { createLearningEngine } from '../infrastructure/database/progressive-learning'
 import { createQuestionBankRepository } from '../infrastructure/database/question-bank-repository'
+import { createStudyMaterialSource } from '../infrastructure/database/study-material-source'
 import {
   createLearningQuestionSource,
   createReminderStore,
@@ -80,7 +82,9 @@ function start(): void {
       system = power
       const scheduler = new SchedulerService({
         store: createReminderStore(database),
+        learning: createLearningEngine(database),
         questions: createLearningQuestionSource(database),
+        studyMaterials: createStudyMaterialSource(database),
         makeId: randomUUID,
         now: Date.now,
         schedule(delay, action) {
@@ -109,7 +113,7 @@ function start(): void {
         openMain: desktop.openMain,
         openAnswer: () => {
           try {
-            if (scheduler.startLearning().notice === 'empty-bank') desktop.openMain()
+            if (scheduler.startLearning().notice) desktop.openMain()
           } catch (error) {
             console.error('Failed to start Pingo learning', error)
           }

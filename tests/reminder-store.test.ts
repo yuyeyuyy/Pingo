@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, expect, it } from 'vitest'
 import { createQuestionBankService } from '../src/application/question-bank/service'
 import { openDatabase } from '../src/infrastructure/database/open'
@@ -23,23 +24,75 @@ afterEach(() => {
   rmSync(directory, { recursive: true, force: true })
 })
 
-it('migrates an existing question database and keeps its banks and questions', () => {
-  const banks = createQuestionBankService(createQuestionBankRepository(db), randomUUID)
-  const bank = banks.importQuestionBank(
-    JSON.stringify({
-      name: '科学',
-      questions: [{ kind: 'short-answer', prompt: '解释蒸发。' }],
-    }),
-  )
-  db.exec('DROP TABLE learning_history; DROP TABLE reminder_state; PRAGMA user_version = 2')
-  db.close()
-  db = openDatabase(directory)
-  expect(db.prepare('PRAGMA user_version').get()?.user_version).toBe(3)
-  expect(createReminderStore(db).load()).toBeUndefined()
-  expect(createLearningQuestionSource(db)(20)).toMatchObject([
-    { bankName: '科学', prompt: '解释蒸发。' },
-  ])
-  expect(createQuestionBankRepository(db).listBanks()).toEqual([bank])
+it('keeps v3 bank and question IDs, saved sessions, and history when adding bank templates', () => {
+  const oldFolder = mkdtempSync(join(directory, 'legacy-'))
+  const legacy = new DatabaseSync(join(oldFolder, 'pingo.sqlite'))
+  const snapshot = {
+    id: 'saved-session',
+    questions: [
+      {
+        id: 'choice',
+        kind: 'multiple-choice',
+        prompt: '旧选择题',
+        options: ['甲', '乙'],
+        correctOptionIndex: 1,
+      },
+    ],
+    answers: [
+      {
+        questionId: 'choice',
+        feedback: { kind: 'multiple-choice', selected: 1, correct: 1, outcome: 'correct' },
+      },
+    ],
+  }
+  try {
+    legacy.exec(`
+      PRAGMA user_version = 3;
+      CREATE TABLE question_banks (id TEXT PRIMARY KEY, name TEXT NOT NULL) STRICT;
+      CREATE TABLE questions (
+        id TEXT PRIMARY KEY, bank_id TEXT REFERENCES question_banks(id),
+        kind TEXT NOT NULL, prompt TEXT NOT NULL, options_json TEXT,
+        correct_option_index INTEGER, reference_answer TEXT
+      ) STRICT;
+      CREATE INDEX questions_bank_id ON questions (bank_id);
+      CREATE TABLE reminder_state (singleton INTEGER PRIMARY KEY, payload TEXT NOT NULL) STRICT;
+      CREATE TABLE learning_history (session_id TEXT PRIMARY KEY, ended_at INTEGER, outcome TEXT, payload TEXT) STRICT;
+      INSERT INTO question_banks VALUES ('old-bank','科学');
+      INSERT INTO questions VALUES ('choice','old-bank','multiple-choice','旧选择题','["甲","乙"]',1,NULL);
+      INSERT INTO questions VALUES ('written','old-bank','short-answer','旧填写题',NULL,NULL,'参考文本');
+    `)
+    legacy
+      .prepare('INSERT INTO reminder_state VALUES (1, ?)')
+      .run(JSON.stringify({ session: snapshot }))
+    legacy
+      .prepare("INSERT INTO learning_history VALUES ('done', 1, 'completed', ?)")
+      .run(JSON.stringify(snapshot))
+  } finally {
+    legacy.close()
+  }
+
+  const migrated = openDatabase(oldFolder)
+  try {
+    expect(migrated.prepare('PRAGMA user_version').get()?.user_version).toBe(9)
+    expect(createReminderStore(migrated).load()?.session).toEqual(snapshot)
+    expect(
+      migrated.prepare("SELECT payload FROM learning_history WHERE session_id = 'done'").get()
+        ?.payload,
+    ).toBe(JSON.stringify(snapshot))
+    const banks = createQuestionBankRepository(migrated)
+    expect(banks.listBanks()).toEqual([{ id: 'old-bank', name: '科学', template: 'basic' }])
+    expect(banks.listQuestions('old-bank')).toEqual([
+      snapshot.questions[0],
+      { id: 'written', kind: 'short-answer', prompt: '旧填写题', referenceAnswer: '参考文本' },
+    ])
+    expect(
+      createLearningQuestionSource(migrated)(20)
+        .map((question) => question.id)
+        .sort(),
+    ).toEqual(['choice', 'written'])
+  } finally {
+    migrated.close()
+  }
 })
 
 it('samples real questions and persists partial answers and the next reminder across SQLite reopen', () => {

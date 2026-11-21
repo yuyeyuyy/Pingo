@@ -53,6 +53,9 @@ export function QuestionEditor({ template, question, onSave, onClose }: Question
       ? Object.entries(LANGUAGE_QUESTION_TYPES).map(([id, option]) => [id, option.label] as const)
       : Object.entries(QUESTION_KINDS)
   const [prompt, setPrompt] = useState(question?.prompt ?? '')
+  const [headword, setHeadword] = useState(
+    question?.kind === 'multiple-choice' ? (question.headword ?? '') : '',
+  )
   const [difficulty, setDifficulty] = useState(question?.difficulty?.toString() ?? '')
   const [conceptKey, setConceptKey] = useState(question?.conceptKey ?? '')
   const [materialKey, setMaterialKey] = useState(question?.materialKey ?? '')
@@ -134,6 +137,9 @@ export function QuestionEditor({ template, question, onSave, onClose }: Question
           kind,
           options: options.map((option) => option.text),
           correctOptionIndex,
+          ...(classification === 'word-to-meaning' && headword.trim()
+            ? { headword: headword.trim() }
+            : {}),
           ...(optionExplanations.some(Boolean) ? { optionExplanations } : {}),
           ...(optionPartsOfSpeech.some(Boolean) ? { optionPartsOfSpeech } : {}),
         })
@@ -274,6 +280,17 @@ export function QuestionEditor({ template, question, onSave, onClose }: Question
             />
           </label>
         </>
+      )}
+      {classification === 'word-to-meaning' && (
+        <label className="bank-field">
+          题干单词（可选）
+          <input
+            value={headword}
+            maxLength={BANK_LIMITS.headword}
+            onChange={(event) => setHeadword(event.target.value)}
+          />
+          <span className="bank-hint">填写题干中要发音的单词，例如 apple。</span>
+        </label>
       )}
       {kind === 'multiple-choice' && (
         <fieldset className="question-options">

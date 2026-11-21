@@ -4,6 +4,7 @@ import type { StudyMaterial } from '../../domain/study-material'
 import type { QuestionPage } from '../../shared/question-bank'
 import {
   bankName,
+  bankLanguage,
   bankTemplate,
   id,
   object,
@@ -53,8 +54,15 @@ export function createQuestionBankService(repository: QuestionBankRepository, ne
     listBanks: () => repository.listBanks(),
 
     createBank(input: unknown): QuestionBank {
-      const { name, template } = object(input)
-      const bank = { id: newId(), name: bankName(name), template: bankTemplate(template) }
+      const inputData = object(input)
+      const template = bankTemplate(inputData.template)
+      const language = bankLanguage(template, inputData.language)
+      const bank = {
+        id: newId(),
+        name: bankName(inputData.name),
+        template,
+        ...(language ? { language } : {}),
+      }
       repository.createBank(bank, [])
       return bank
     },

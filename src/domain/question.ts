@@ -1,4 +1,5 @@
 import type { PartOfSpeech } from './part-of-speech'
+import type { BankLanguage } from './language'
 
 export const BANK_TEMPLATES = {
   basic: '基础模板',
@@ -42,6 +43,7 @@ type QuestionContent =
       readonly correctOptionIndex: number
       readonly optionExplanations?: readonly (string | null)[]
       readonly optionPartsOfSpeech?: readonly (PartOfSpeech | null)[]
+      readonly headword?: string
     }
   | {
       readonly kind: 'short-answer'
@@ -69,6 +71,7 @@ export interface QuestionBank {
   readonly id: string
   readonly name: string
   readonly template: BankTemplate
+  readonly language?: BankLanguage
 }
 
 export function isPermutation(order: readonly unknown[], size: number): order is readonly number[] {

@@ -364,7 +364,9 @@ it('backfills vocabulary progress from v8 history and the current reading positi
       },
     }),
   )
-  database.exec('DROP TABLE study_material_progress; PRAGMA user_version = 8')
+  database.exec(
+    'DROP TABLE study_material_progress; ALTER TABLE question_banks DROP COLUMN language; PRAGMA user_version = 8',
+  )
   database.close()
   database = openDatabase(directory)
 

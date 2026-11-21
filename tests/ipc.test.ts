@@ -24,12 +24,14 @@ function register(
   runtime: Parameters<typeof registerIpc>[0],
   isTrusted: Parameters<typeof registerIpc>[1],
   scheduler = schedulerFixture().create(),
+  pronunciation = vi.fn().mockResolvedValue(null),
 ) {
   return registerIpc(
     runtime,
     isTrusted,
     createQuestionBankService(createQuestionBankRepository(database), randomUUID),
     scheduler,
+    pronunciation,
   )
 }
 
@@ -124,6 +126,11 @@ describe('app IPC', () => {
       error: { code: 'FORBIDDEN' },
     })
     expect(
+      invoke(IPC_CHANNELS.getPronunciation, { sessionId: 'session', questionId: 'q' }),
+    ).toMatchObject({
+      error: { code: 'FORBIDDEN' },
+    })
+    expect(
       invoke(IPC_CHANNELS.advanceStudyMaterial, { sessionId: 'session', position: 1 }),
     ).toMatchObject({
       error: { code: 'FORBIDDEN' },
@@ -135,6 +142,103 @@ describe('app IPC', () => {
       }),
     ).toMatchObject({ error: { code: 'INVALID_ARGUMENTS' } })
     expect(scheduler.status().settings.intervalMinutes).toBe(30)
+  })
+
+  it('only resolves pronunciation for the current visible word and awaits the adapter', async () => {
+    const scheduler = schedulerFixture({
+      questions: () => [
+        {
+          id: 'q',
+          bankName: '词表',
+          kind: 'multiple-choice',
+          languageType: 'word-to-meaning',
+          prompt: 'hello 的意思是什么？',
+          options: ['你好', '再见'],
+          correctOptionIndex: 0,
+          optionExplanations: ['hello', 'goodbye'],
+        },
+      ],
+    }).create()
+    const clip = { mimeType: 'audio/mpeg', bytes: new Uint8Array([1, 2]).buffer }
+    const lookup = vi.fn().mockResolvedValue(clip)
+    register({ getVersion: () => '0.1.0', platform: 'darwin' }, () => true, scheduler, lookup)
+    scheduler.start()
+    try {
+      scheduler.startLearning()
+      const view = scheduler.answerView()
+      if (view?.kind !== 'question') throw new Error('expected a question')
+      const target = { sessionId: view.sessionId, questionId: view.question.id }
+      expect(invoke(IPC_CHANNELS.getPronunciation, { ...target, optionIndex: 1 })).toMatchObject({
+        error: { code: 'INVALID_ARGUMENTS' },
+      })
+      expect(
+        invoke(IPC_CHANNELS.getPronunciation, { ...target, questionId: 'stale' }),
+      ).toMatchObject({ error: { code: 'NOT_FOUND' } })
+      expect(lookup).not.toHaveBeenCalled()
+      await expect(invoke(IPC_CHANNELS.getPronunciation, target)).resolves.toEqual({
+        ok: true,
+        data: clip,
+      })
+      expect(lookup).toHaveBeenCalledWith('en', 'hello')
+      scheduler.submit({ ...target, answer: { kind: 'multiple-choice', optionIndex: 0 } })
+      await expect(
+        invoke(IPC_CHANNELS.getPronunciation, { ...target, optionIndex: 1 }),
+      ).resolves.toEqual({ ok: true, data: clip })
+      expect(lookup).toHaveBeenLastCalledWith('en', 'goodbye')
+    } finally {
+      scheduler.stop()
+    }
+  })
+
+  it('pronounces only the current study card and routes by that card’s language', async () => {
+    const scheduler = schedulerFixture({
+      questions: () => [
+        { id: 'en', bankName: '英语', kind: 'short-answer', language: 'en', prompt: '填空' },
+        { id: 'ja', bankName: '日语', kind: 'short-answer', language: 'ja', prompt: '填空' },
+      ],
+      studyMaterials: () => [
+        { key: 'hello', title: 'Hello', bankName: '英语', explanation: '你好', examples: [] },
+        {
+          key: 'hello-ja',
+          title: 'こんにちは',
+          language: 'ja',
+          bankName: '日语',
+          explanation: '你好',
+          examples: [],
+        },
+      ],
+    }).create()
+    const lookup = vi.fn().mockResolvedValue(null)
+    register({ getVersion: () => '0.1.0', platform: 'darwin' }, () => true, scheduler, lookup)
+    scheduler.start()
+    try {
+      scheduler.updateSettings({ ...scheduler.status().settings, sessionMode: 'study' })
+      scheduler.startLearning()
+      const view = scheduler.answerView()
+      if (view?.kind !== 'material') throw new Error('expected a material')
+      const target = { sessionId: view.sessionId, position: 1 }
+      expect(invoke(IPC_CHANNELS.getPronunciation, { ...target, position: 2 })).toMatchObject({
+        error: { code: 'NOT_FOUND' },
+      })
+      expect(invoke(IPC_CHANNELS.getPronunciation, { ...target, optionIndex: 0 })).toMatchObject({
+        error: { code: 'INVALID_ARGUMENTS' },
+      })
+      await expect(invoke(IPC_CHANNELS.getPronunciation, target)).resolves.toEqual({
+        ok: true,
+        data: null,
+      })
+      expect(lookup).toHaveBeenCalledExactlyOnceWith('en', 'hello')
+      scheduler.advanceStudyMaterial(target)
+      expect(invoke(IPC_CHANNELS.getPronunciation, target)).toMatchObject({
+        error: { code: 'NOT_FOUND' },
+      })
+      expect(invoke(IPC_CHANNELS.getPronunciation, { ...target, position: 2 })).toMatchObject({
+        error: { code: 'INVALID_ARGUMENTS' },
+      })
+      expect(lookup).toHaveBeenCalledOnce()
+    } finally {
+      scheduler.stop()
+    }
   })
 
   it('reuses the active session when the same start IPC is invoked repeatedly', () => {

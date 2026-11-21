@@ -1,12 +1,15 @@
 import { app, dialog, session } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
+import appIconPath from '../../assets/pingo.png?asset'
 import { createQuestionBankService } from '../application/question-bank/service'
+import { createPronunciationService } from '../application/pronunciation'
 import { SchedulerService } from '../application/reminders/scheduler'
 import { openDatabase } from '../infrastructure/database/open'
 import { createLearningEngine } from '../infrastructure/database/progressive-learning'
 import { createQuestionBankRepository } from '../infrastructure/database/question-bank-repository'
 import { createStudyMaterialSource } from '../infrastructure/database/study-material-source'
+import { createFreeDictionaryAdapter } from '../infrastructure/pronunciation/free-dictionary'
 import {
   createLearningQuestionSource,
   createReminderStore,
@@ -56,6 +59,7 @@ function start(): void {
         join(__dirname, '../renderer/index.html'),
       )
       database = openDatabase(app.getPath('userData'))
+      if (!app.isPackaged) app.dock?.setIcon(appIconPath)
 
       session.defaultSession.setPermissionCheckHandler(() => false)
       session.defaultSession.setPermissionRequestHandler((_contents, _permission, allow) =>
@@ -108,6 +112,7 @@ function start(): void {
         desktop.isTrusted,
         createQuestionBankService(createQuestionBankRepository(database), randomUUID),
         scheduler,
+        createPronunciationService({ en: createFreeDictionaryAdapter() }),
       )
       const actions = {
         openMain: desktop.openMain,

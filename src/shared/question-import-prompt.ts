@@ -39,7 +39,7 @@ export function conversionPrompt(template: BankTemplate): string {
 
 四种题型的数据格式
 
-- 选择题 {"kind":"multiple-choice","prompt":"apple 的中文释义是什么？","options":["苹果","梨"],"correctOptionIndex":0,"optionExplanations":["apple","pear"],"optionPartsOfSpeech":["n","n"],"difficulty":1,"conceptKey":"apple:n:fruit"}。正确选项下标从 0 开始，共 2 至 20 个选项。单词选释义时，optionExplanations 提供每条释义对应的单词。释义选单词时，它提供每个单词的释义。词性的简写独立填在 optionPartsOfSpeech，如 v、adj、n、adv，按每个选项对应的义项填写。这两个可选数组都要与 options 同序同长，资料无法确认的项填 null。
+- 选择题 {"kind":"multiple-choice","prompt":"apple 的中文释义是什么？","options":["苹果","梨"],"correctOptionIndex":0,"optionExplanations":["apple","pear"],"optionPartsOfSpeech":["n","n"],"difficulty":1,"conceptKey":"apple:n:fruit"}。正确选项下标从 0 开始，共 2 至 20 个选项。单词选释义时，optionExplanations 提供每条释义对应的单词，建议填写 headword（如 "apple"）标记题干里可点击发音的单词。headword 必须出现在题干中，最长 80 字符。释义选单词时，optionExplanations 提供每个单词的释义。词性的简写独立填在 optionPartsOfSpeech，如 v、adj、n、adv，按每个选项对应的义项填写。这两个可选数组都要与 options 同序同长，资料无法确认的项填 null。
 - 填写题 {"kind":"short-answer","prompt":"输入「苹果」的英文单词。","acceptedAnswers":["apple"],"referenceAnswer":"apple","difficulty":2,"conceptKey":"apple:n:fruit"}。可用 acceptedAnswers 提供 1 至 20 个可接受答案。只有参考答案、需自评的普通填写题可以省略 acceptedAnswers。语言分类中的单词拼写和语法纠错需提供可接受答案。
 - 填空题 {"kind":"fill-in","prompt":"She {{blank}} a teacher.","blanks":[["is"]]}。在题干用 {{blank}} 标记 1 至 20 个空，blanks 按空的顺序排列，每个空包含 1 至 20 个可接受答案。
 - 排序题 {"kind":"ordering","prompt":"将词语排列成句。","items":["apples","like","I"],"correctOrder":[2,1,0]}。包含 2 至 60 个条目，正确顺序是从 0 开始的不重复下标，涵盖全部条目。排序题至少包含两个不同的条目。

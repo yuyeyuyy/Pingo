@@ -1,6 +1,7 @@
 import type { DatabaseSync, SQLOutputValue } from 'node:sqlite'
 import type { QuestionBankRepository } from '../../application/question-bank/service'
 import { RequestError } from '../../application/request-error'
+import { isBankLanguage } from '../../domain/language'
 import type { BankTemplate, Difficulty, Question, QuestionBank } from '../../domain/question'
 import type { PracticeSource } from '../../domain/review'
 import type { StudyMaterial } from '../../domain/study-material'
@@ -25,7 +26,12 @@ export function questionFromRow(row: Row): Question {
 }
 
 function bankFromRow(row: Row): QuestionBank {
-  return { id: String(row.id), name: String(row.name), template: row.template as BankTemplate }
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    template: row.template as BankTemplate,
+    ...(isBankLanguage(row.language) ? { language: row.language } : {}),
+  }
 }
 
 function fields(question: Question) {
@@ -48,10 +54,14 @@ function fields(question: Question) {
 }
 
 export function createQuestionBankRepository(database: DatabaseSync): QuestionBankRepository {
-  const listBanks = database.prepare('SELECT id, name, template FROM question_banks ORDER BY rowid')
-  const getBank = database.prepare('SELECT id, name, template FROM question_banks WHERE id = ?')
+  const listBanks = database.prepare(
+    'SELECT id, name, template, language FROM question_banks ORDER BY rowid',
+  )
+  const getBank = database.prepare(
+    'SELECT id, name, template, language FROM question_banks WHERE id = ?',
+  )
   const insertBank = database.prepare(
-    'INSERT INTO question_banks (id, name, template) VALUES (?, ?, ?)',
+    'INSERT INTO question_banks (id, name, template, language) VALUES (?, ?, ?, ?)',
   )
   const renameBank = database.prepare('UPDATE question_banks SET name = ? WHERE id = ?')
   const deleteBank = database.prepare('DELETE FROM question_banks WHERE id = ?')
@@ -135,7 +145,7 @@ export function createQuestionBankRepository(database: DatabaseSync): QuestionBa
     },
     createBank(bank, questions, materials = []) {
       writeTransaction(database, () => {
-        insertBank.run(bank.id, bank.name, bank.template)
+        insertBank.run(bank.id, bank.name, bank.template, bank.language ?? null)
         writeContent(bank.id, questions, materials)
       })
     },

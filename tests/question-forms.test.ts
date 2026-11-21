@@ -3,7 +3,12 @@ import { questionDraft } from '../src/application/question-bank/validation'
 import { submitRequest } from '../src/application/reminders/validation'
 import { LANGUAGE_QUESTION_TYPES } from '../src/domain/question'
 import type { QuestionKind } from '../src/domain/question'
-import { gradeAnswer, prepareSessionQuestion, questionView } from '../src/domain/session'
+import {
+  gradeAnswer,
+  prepareSessionQuestion,
+  questionView,
+  spokenWord,
+} from '../src/domain/session'
 import type { LearningSession, SessionQuestion } from '../src/domain/session'
 
 const samples = {
@@ -72,6 +77,32 @@ it('reveals distractor meanings and parts of speech only after answering', () =>
   expect(gradeAnswer(question, { kind: 'unsure' })).toMatchObject({
     optionPartsOfSpeech: ['n', null],
   })
+})
+
+it('reads only the visible headword before submission and revealed words afterwards', () => {
+  const question: SessionQuestion = {
+    ...base,
+    ...samples['multiple-choice'],
+    languageType: 'word-to-meaning',
+    prompt: 'What does Apple mean?',
+    headword: 'apple',
+  }
+  const initial = view(question)
+  if (initial?.kind !== 'question') throw new Error('expected a question')
+  expect(spokenWord(initial.question, undefined)).toBe('apple')
+  expect(spokenWord(initial.question, undefined, 1)).toBeUndefined()
+  const feedback = gradeAnswer(question, { kind: 'multiple-choice', optionIndex: 0 })!
+  expect(spokenWord(initial.question, feedback, 1)).toBe('pear')
+  const reverse = view({ ...question, languageType: 'meaning-to-word', options: ['apple', 'pear'] })
+  if (reverse?.kind !== 'question') throw new Error('expected a question')
+  expect(spokenWord(reverse.question, undefined, 0)).toBe('apple')
+  expect(spokenWord(reverse.question, undefined)).toBeUndefined()
+  const unsupported = view({ ...question, language: 'ja' })
+  if (unsupported?.kind !== 'question') throw new Error('expected a question')
+  expect(spokenWord(unsupported.question, feedback)).toBeUndefined()
+  expect(() => questionDraft({ ...question, headword: 'unrelated' }, 'language')).toThrow(
+    '须出现在题干中',
+  )
 })
 
 it('grades accepted typed answers and keeps legacy self-assessment', () => {

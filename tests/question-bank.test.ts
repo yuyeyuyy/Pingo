@@ -156,6 +156,20 @@ it('appends to the selected template bank, preserving existing questions and rol
   })
 })
 
+it('validates and persists the language of a language-template bank', () => {
+  const banks = service()
+  const english = banks.createBank({ name: '旧调用', template: 'language' })
+  const japanese = banks.createBank({ name: '日语题库', template: 'language', language: 'ja' })
+  expect(english.language).toBe('en')
+  expect(japanese.language).toBe('ja')
+  expect(banks.renameBank({ bankId: japanese.id, name: '日语练习' }).language).toBe('ja')
+  expect(banks.listBanks()[1]).toMatchObject({ id: japanese.id, language: 'ja' })
+  expect(() =>
+    banks.createBank({ name: '不支持的代码', template: 'language', language: 'fake' }),
+  ).toThrow('有效的题库语言')
+  expect(() => banks.createBank({ name: '基础', language: 'en' })).toThrow('语言学习模板')
+})
+
 it('accepts more than 3000 questions and searches and paginates within one bank', () => {
   const banks = service()
   const target = banks.createBank({ name: '大量题目' })

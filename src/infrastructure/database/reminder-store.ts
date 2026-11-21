@@ -2,6 +2,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import type { LearningSelection } from '../../application/reminders/learning-engine'
 import type { ReminderState, ReminderStore } from '../../application/reminders/scheduler'
 import { REVIEW_SUCCESSES } from '../../domain/review'
+import { isBankLanguage } from '../../domain/language'
 import type { PracticeSource } from '../../domain/review'
 import { createOptionPartsOfSpeechLookup } from './option-parts-of-speech'
 import { createLearningProgressWriter } from './progressive-learning'
@@ -88,7 +89,7 @@ export function createLearningQuestionSource(database: DatabaseSync) {
     const bankFilter = singleBank ? 'q.bank_id = ?' : '1'
     const questions = `
       SELECT q.id, q.kind, q.prompt, q.content_json, q.difficulty, q.concept_key, q.bank_id,
-        b.name AS bank_name
+        b.name AS bank_name, b.language AS bank_language
       FROM questions q JOIN question_banks b ON b.id = q.bank_id
     `
     return {
@@ -129,6 +130,7 @@ export function createLearningQuestionSource(database: DatabaseSync) {
     return rows.map((row) => ({
       ...withPartsOfSpeech(questionFromRow(row), String(row.bank_id)),
       bankName: String(row.bank_name),
+      ...(isBankLanguage(row.bank_language) ? { language: row.bank_language } : {}),
     }))
   }
 }

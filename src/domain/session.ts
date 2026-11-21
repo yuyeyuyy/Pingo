@@ -5,10 +5,15 @@ import type { LearningQuestionPlan, LearningStrategy } from './progressive-learn
 import type { SessionStage } from './scheduling'
 import type { PartOfSpeech } from './part-of-speech'
 import type { StudyMaterial, StudySubject } from './study-material'
+import { DEFAULT_BANK_LANGUAGE } from './language'
+import type { BankLanguage } from './language'
+import { locateSpokenWord, normalizedSpokenWord, supportsPronunciation } from './pronunciation'
+import type { WordRange } from './pronunciation'
 
 export type SessionQuestion = Question & {
   readonly bankName: string
   readonly learning?: LearningQuestionPlan
+  readonly language?: BankLanguage
 }
 export type AnswerInput =
   | { kind: 'unsure' }
@@ -46,6 +51,7 @@ export interface SubmittedAnswer {
 export type SessionStudyMaterial = StudyMaterial & {
   readonly bankName: string
   readonly subject?: StudySubject
+  readonly language?: BankLanguage
 }
 
 export interface StudyMaterialTarget {
@@ -71,7 +77,11 @@ export type VisibleQuestion = {
   prompt: string
   languageType?: LanguageQuestionType
 } & (
-  | { kind: 'multiple-choice'; options: readonly string[] }
+  | {
+      kind: 'multiple-choice'
+      options: readonly string[]
+      pronunciation?: { language: BankLanguage; promptWord?: WordRange }
+    }
   | { kind: 'short-answer' }
   | { kind: 'fill-in'; blankCount: number }
   | { kind: 'ordering'; items: readonly string[] }
@@ -107,18 +117,60 @@ export interface SessionTarget {
   questionId: string
 }
 
+export type PronunciationTarget = (SessionTarget & { optionIndex?: number }) | StudyMaterialTarget
+
+export type PronunciationView = Extract<AnswerView, { kind: 'question' | 'material' }>
+
+export function spokenWord(
+  question: VisibleQuestion,
+  feedback: AnswerFeedback | undefined,
+  optionIndex?: number,
+): string | undefined {
+  if (question.kind !== 'multiple-choice' || !question.pronunciation) return undefined
+  if (question.languageType === 'meaning-to-word' && optionIndex !== undefined)
+    return normalizedSpokenWord(question.options[optionIndex])
+  if (question.languageType !== 'word-to-meaning') return undefined
+  if (optionIndex !== undefined)
+    return normalizedSpokenWord(
+      feedback?.kind === 'multiple-choice'
+        ? (feedback.optionExplanations?.[optionIndex] ?? undefined)
+        : undefined,
+    )
+  const range = question.pronunciation.promptWord
+  return range ? normalizedSpokenWord(question.prompt.slice(range.start, range.end)) : undefined
+}
+
+export function pronunciationForView(view: PronunciationView, optionIndex?: number) {
+  if (view.kind === 'material') {
+    const { language, title } = view.material
+    const word = normalizedSpokenWord(title)
+    return language && supportsPronunciation(language) && word ? { language, word } : undefined
+  }
+  const { question, feedback } = view
+  const word = spokenWord(question, feedback, optionIndex)
+  return word && question.kind === 'multiple-choice' && question.pronunciation
+    ? { language: question.pronunciation.language, word }
+    : undefined
+}
+
 export function nextStudyMaterial(session: LearningSession) {
   const study = session.study
   const material = study?.materials[study.index]
-  return study && material
-    ? {
-        kind: 'material' as const,
-        sessionId: session.id,
-        position: study.index + 1,
-        total: study.materials.length,
-        material,
-      }
-    : undefined
+  if (!study || !material) return undefined
+  // Older session snapshots may carry the language only on their paired question.
+  const paired =
+    study.materials.length === session.questions.length ? session.questions[study.index] : undefined
+  const language =
+    material.language ??
+    paired?.language ??
+    (paired?.languageType ? DEFAULT_BANK_LANGUAGE : undefined)
+  return {
+    kind: 'material' as const,
+    sessionId: session.id,
+    position: study.index + 1,
+    total: study.materials.length,
+    material: language && !material.language ? { ...material, language } : material,
+  }
 }
 
 function visibleQuestion(question: SessionQuestion): VisibleQuestion {
@@ -129,8 +181,26 @@ function visibleQuestion(question: SessionQuestion): VisibleQuestion {
     languageType: question.languageType,
   }
   switch (question.kind) {
-    case 'multiple-choice':
-      return { ...base, kind: question.kind, options: question.options }
+    case 'multiple-choice': {
+      const language = question.language ?? DEFAULT_BANK_LANGUAGE
+      const canSpeak =
+        supportsPronunciation(language) &&
+        (question.languageType === 'word-to-meaning' || question.languageType === 'meaning-to-word')
+      const promptWord =
+        canSpeak && question.languageType === 'word-to-meaning'
+          ? locateSpokenWord(question.prompt, [
+              question.headword,
+              question.optionExplanations?.[question.correctOptionIndex] ?? undefined,
+              question.conceptKey?.split(':', 1)[0],
+            ])
+          : undefined
+      return {
+        ...base,
+        kind: question.kind,
+        options: question.options,
+        ...(canSpeak ? { pronunciation: { language, ...(promptWord ? { promptWord } : {}) } } : {}),
+      }
+    }
     case 'short-answer':
       return { ...base, kind: question.kind }
     case 'fill-in': {

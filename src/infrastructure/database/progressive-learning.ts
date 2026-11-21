@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite'
+import { isBankLanguage } from '../../domain/language'
 import { createOptionPartsOfSpeechLookup } from './option-parts-of-speech'
 import type { LearningEngine, LearningSelection } from '../../application/reminders/learning-engine'
 import {
@@ -53,7 +54,8 @@ export function createLearningEngine(database: DatabaseSync): LearningEngine {
   const { read } = profiles(database)
   const withPartsOfSpeech = createOptionPartsOfSpeechLookup(database)
   const question = database.prepare(`
-    SELECT q.id, q.kind, q.prompt, q.content_json, q.difficulty, q.concept_key, b.name AS bank_name
+    SELECT q.id, q.kind, q.prompt, q.content_json, q.difficulty, q.concept_key,
+      b.name AS bank_name, b.language AS bank_language
     FROM questions q JOIN question_banks b ON b.id = q.bank_id WHERE q.id = ?
   `)
 
@@ -195,6 +197,7 @@ export function createLearningEngine(database: DatabaseSync): LearningEngine {
         return {
           ...withPartsOfSpeech(questionFromRow(row), bankId),
           bankName: String(row.bank_name),
+          ...(isBankLanguage(row.bank_language) ? { language: row.bank_language } : {}),
           learning: {
             bankId,
             difficulty,

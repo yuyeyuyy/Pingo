@@ -809,8 +809,39 @@ dd {
   overflow-wrap: anywhere;
 }
 
-.learning-option:has(input:not(:disabled)) {
+.learning-option-choice {
+  display: flex;
+  align-items: flex-start;
+  min-width: 0;
+  gap: 8px;
+}
+
+.learning-option-choice:has(.learning-option-label) {
+  flex: 1;
+}
+
+.learning-option-choice:has(input:not(:disabled)) {
   cursor: pointer;
+}
+
+.pronunciation-word {
+  display: inline;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  text-decoration: underline dotted;
+  text-underline-offset: 0.18em;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.pronunciation-word svg {
+  margin-inline-start: 4px;
+  vertical-align: -0.13em;
 }
 
 .learning-option:has(input:checked),

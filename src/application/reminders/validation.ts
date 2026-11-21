@@ -2,7 +2,7 @@ import { PAUSE_OPTIONS, SNOOZE_MINUTES } from '../../domain/scheduling'
 import type { PauseOption, ReminderSettings } from '../../domain/scheduling'
 import { PRACTICE_SOURCES } from '../../domain/review'
 import type { PracticeSource } from '../../domain/review'
-import type { SessionTarget, StudyMaterialTarget } from '../../domain/session'
+import type { PronunciationTarget, SessionTarget, StudyMaterialTarget } from '../../domain/session'
 import type {
   RateAnswerRequest,
   SetAnswerFavoriteRequest,
@@ -93,6 +93,20 @@ export function sessionId(value: unknown): string {
 export function sessionTarget(input: unknown): SessionTarget {
   const data = record(input)
   return { sessionId: sessionId(data.sessionId), questionId: sessionId(data.questionId) }
+}
+
+export function pronunciationTarget(input: unknown): PronunciationTarget {
+  const data = record(input)
+  if (data.position !== undefined) {
+    if (data.questionId !== undefined || data.optionIndex !== undefined) invalid('发音位置无效。')
+    return studyMaterialTarget(data)
+  }
+  const target = sessionTarget(data)
+  if (data.optionIndex === undefined) return target
+  return {
+    ...target,
+    optionIndex: integer(data.optionIndex, 0, BANK_LIMITS.maxOptions - 1, '选项序号无效。'),
+  }
 }
 
 export function studyMaterialTarget(input: unknown): StudyMaterialTarget {

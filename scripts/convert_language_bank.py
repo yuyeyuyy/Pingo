@@ -46,7 +46,7 @@ def require(ok: bool, reason: str) -> None:
 def limits_from_project() -> dict[str, int]:
     source = (ROOT / 'src/shared/question-bank.ts').read_text(encoding='utf-8')
     result = {}
-    for key in ('prompt', 'referenceAnswer', 'option', 'minOptions', 'maxOptions', 'maxBlanks', 'maxItems', 'conceptKey', 'materialKey', 'materialTitle', 'maxExamples', 'importBytes'):
+    for key in ('prompt', 'referenceAnswer', 'option', 'headword', 'minOptions', 'maxOptions', 'maxBlanks', 'maxItems', 'conceptKey', 'materialKey', 'materialTitle', 'maxExamples', 'importBytes'):
         match = re.search(rf'\b{key}:\s*([\d_]+(?:\s*\*\s*[\d_]+)*)\s*,', source)
         require(match is not None, f'cannot_read_project_limit:{key}')
         value = 1
@@ -117,6 +117,10 @@ def validate_question(row: dict, limits: dict) -> dict:
                 'language_type_kind_mismatch')
         q['languageType'] = category
     if kind == 'multiple-choice':
+        if category == 'word-to-meaning' and 'headword' in row:
+            headword = text(row['headword'], limits['headword'], 'headword').strip()
+            require(headword.lower() in q['prompt'].lower(), 'headword_not_in_prompt')
+            q['headword'] = headword
         opts = strings(row.get('options'), limits['minOptions'], limits['maxOptions'], limits['option'], 'options')
         require(len({o.strip() for o in opts}) == len(opts), 'duplicate_options')
         correct = row.get('correctOptionIndex')
@@ -275,6 +279,8 @@ def generate_recognition(rows, skipped, limits):
         row['optionExplanations'] = (row['optionWords'] if row['direction'] == 'en_to_zh'
                                      else [vocabulary[word].meaning for word in row['optionWords']])
         row['optionPartsOfSpeech'] = [vocabulary[word].pos for word in row['optionWords']]
+        if row['direction'] == 'en_to_zh':
+            row['headword'] = row['word']
         by_record[number].append((row, validate_question(row, limits)))
     return by_record, {
         'source_words_in_distractor_pool': len(entries),

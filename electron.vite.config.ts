@@ -11,6 +11,7 @@ function rendererCsp(): Plugin {
         server ? "script-src 'self' 'unsafe-inline'" : "script-src 'self'",
         server ? "style-src 'self' 'unsafe-inline'" : "style-src 'self'",
         "img-src 'self' data:",
+        'media-src blob:',
         "base-uri 'none'",
         "form-action 'none'",
         ...(server ? ["connect-src 'self' ws://127.0.0.1:*"] : []),

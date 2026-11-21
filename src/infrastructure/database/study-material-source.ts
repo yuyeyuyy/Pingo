@@ -1,10 +1,11 @@
 import type { DatabaseSync } from 'node:sqlite'
+import { isBankLanguage } from '../../domain/language'
 import type { SessionStudyMaterial } from '../../domain/session'
 import type { StudyExample } from '../../domain/study-material'
 
 export function createStudyMaterialSource(database: DatabaseSync) {
   const select = database.prepare(`
-    SELECT m.key, m.title, m.explanation, m.examples_json, b.name AS bank_name,
+    SELECT m.key, m.title, m.explanation, m.examples_json, b.name AS bank_name, b.language,
       b.id AS bank_id, pingo_study_subject(b.template, m.title, m.key) AS subject_key
     FROM json_each(?) AS selected
     JOIN questions q ON q.id = selected.value
@@ -21,5 +22,6 @@ export function createStudyMaterialSource(database: DatabaseSync) {
       examples: JSON.parse(String(row.examples_json)) as StudyExample[],
       bankName: String(row.bank_name),
       subject: { bankId: String(row.bank_id), key: String(row.subject_key) },
+      ...(isBankLanguage(row.language) ? { language: row.language } : {}),
     }))
 }

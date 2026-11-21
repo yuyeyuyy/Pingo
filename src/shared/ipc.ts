@@ -1,5 +1,8 @@
+import type { PronunciationClip } from '../domain/pronunciation'
+import type { PronunciationTarget } from '../domain/session'
 import type {
   BankTemplate,
+  BankLanguage,
   Question,
   QuestionBank,
   QuestionDraft,
@@ -29,7 +32,11 @@ export interface PingoApi {
   getAppInfo(): Promise<AppInfo>
   ping(): Promise<'pong'>
   listBanks(): Promise<readonly QuestionBank[]>
-  createBank(input: { name: string; template?: BankTemplate }): Promise<QuestionBank>
+  createBank(input: {
+    name: string
+    template?: BankTemplate
+    language?: BankLanguage
+  }): Promise<QuestionBank>
   renameBank(input: { bankId: string; name: string }): Promise<QuestionBank>
   deleteBank(input: { bankId: string }): Promise<void>
   listQuestions(input: { bankId: string }): Promise<readonly Question[]>
@@ -57,6 +64,7 @@ export interface PingoApi {
   startLearning(): Promise<ReminderStatus>
   skipPendingLearning(sessionId: string): Promise<ReminderStatus>
   getAnswerView(): Promise<AnswerView>
+  getPronunciation(target: PronunciationTarget): Promise<PronunciationClip | null>
   submitAnswer(request: SubmitAnswerRequest): Promise<AnswerView>
   setAnswerFavorite(request: SetAnswerFavoriteRequest): Promise<AnswerView>
   rateAnswer(request: RateAnswerRequest): Promise<AnswerView>
@@ -92,6 +100,7 @@ export const IPC_CHANNELS = {
   startLearning: 'learning:start',
   skipPendingLearning: 'learning:skip-pending',
   getAnswerView: 'learning:get-view',
+  getPronunciation: 'learning:pronunciation',
   submitAnswer: 'learning:submit',
   setAnswerFavorite: 'learning:set-favorite',
   rateAnswer: 'learning:rate-answer',

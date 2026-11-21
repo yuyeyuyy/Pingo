@@ -2,8 +2,18 @@ import { ArrowLeft, ArrowUpRight, BookOpen, FileUp, Languages, Plus } from 'luci
 import { useEffect, useState } from 'react'
 import type { DragEvent } from 'react'
 import type { PingoApi } from '../../shared/ipc'
-import { BANK_LIMITS, BANK_TEMPLATES, PRACTICE_SOURCES } from '../../shared/question-bank'
-import type { BankTemplate, PracticeSource, QuestionBank } from '../../shared/question-bank'
+import {
+  BANK_LANGUAGES,
+  BANK_LIMITS,
+  BANK_TEMPLATES,
+  PRACTICE_SOURCES,
+} from '../../shared/question-bank'
+import type {
+  BankLanguage,
+  BankTemplate,
+  PracticeSource,
+  QuestionBank,
+} from '../../shared/question-bank'
 import { EmptyState } from '../components/EmptyState'
 import { ActionDialog } from '../components/question-bank/ActionDialog'
 import { BankImportDialog } from '../components/question-bank/BankImportDialog'
@@ -28,18 +38,20 @@ function BankNameDialog({
   onClose,
 }: {
   bank?: QuestionBank
-  onSave(name: string, template: BankTemplate): Promise<void>
+  onSave(name: string, template: BankTemplate, language?: BankLanguage): Promise<void>
   onClose(): void
 }) {
   const [name, setName] = useState(bank?.name ?? '')
   const [template, setTemplate] = useState(bank?.template)
+  const [language, setLanguage] = useState<BankLanguage | ''>(bank?.language ?? '')
   return (
     <ActionDialog
       title={bank ? '重命名题库' : '新建题库'}
       label={bank ? '保存名称' : '创建题库'}
       onSubmit={() => {
         if (!template) throw new Error('请选择题库模板。')
-        return onSave(name, template)
+        if (!bank && template === 'language' && !language) throw new Error('请选择学习语言。')
+        return onSave(name, template, template === 'language' && language ? language : undefined)
       }}
       onClose={onClose}
     >
@@ -73,6 +85,27 @@ function BankNameDialog({
             </label>
           ))}
         </fieldset>
+      )}
+      {!bank && template === 'language' && (
+        <label className="bank-field">
+          学习语言
+          <select
+            aria-label="学习语言"
+            required
+            value={language}
+            onChange={(event) => setLanguage(event.target.value as BankLanguage | '')}
+          >
+            <option value="" disabled>
+              选择语言
+            </option>
+            {Object.entries(BANK_LANGUAGES).map(([code, { label }]) => (
+              <option key={code} value={code}>
+                {label}
+              </option>
+            ))}
+          </select>
+          <span className="bank-hint">英语题库支持词典发音。</span>
+        </label>
       )}
     </ActionDialog>
   )
@@ -125,7 +158,9 @@ function BankCard({
         </span>
         <strong>{bank.name}</strong>
         <span className="bank-hint">
-          {dragging ? '松开以选择导入' : BANK_TEMPLATES[bank.template]}
+          {dragging
+            ? '松开以选择导入'
+            : `${BANK_TEMPLATES[bank.template]}${bank.language ? ` · ${BANK_LANGUAGES[bank.language].label}` : ''}`}
         </span>
       </button>
       <div className="bank-book-links">
@@ -212,7 +247,7 @@ function BankWorkspace({ api }: { api: PingoApi }) {
           <h1 id="page-title">{selected?.name ?? '题库'}</h1>
           <p>
             {selected
-              ? BANK_TEMPLATES[selected.template]
+              ? `${BANK_TEMPLATES[selected.template]}${selected.language ? ` · ${BANK_LANGUAGES[selected.language].label}` : ''}`
               : '创建题库后，可手动添加题目或拖入 JSON 文件。'}
           </p>
         </div>
@@ -327,8 +362,8 @@ function BankWorkspace({ api }: { api: PingoApi }) {
       {mode?.kind === 'create' && (
         <BankNameDialog
           onClose={close}
-          onSave={async (name, template) => {
-            const bank = await api.createBank({ name, template })
+          onSave={async (name, template, language) => {
+            const bank = await api.createBank({ name, template, language })
             setBanks((items) => [...(items ?? []), bank])
             setStatus(`已创建「${bank.name}」。`)
           }}

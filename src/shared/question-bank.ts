@@ -1,3 +1,5 @@
+export { BANK_LANGUAGES } from '../domain/language'
+export type { BankLanguage } from '../domain/language'
 export {
   BANK_TEMPLATES,
   BLANK_MARKER,
@@ -28,6 +30,7 @@ export const BANK_LIMITS = {
   option: 2_000,
   minOptions: 2,
   maxOptions: 20,
+  headword: 80,
   maxItems: 60,
   maxBlanks: 20,
   conceptKey: 160,

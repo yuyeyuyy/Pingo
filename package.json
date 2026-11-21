@@ -18,7 +18,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "build": "electron-vite build",
-    "package:mac": "npm run build && electron-packager . Pingo --platform=darwin --out=dist --overwrite --asar --ignore='^/(?!out(?:/|$)|package[.]json$)'"
+    "package:mac": "npm run build && electron-packager . Pingo --platform=darwin --icon=assets/pingo.icns --out=dist --overwrite --asar --ignore='^/(?!out(?:/|$)|package[.]json$)'"
   },
   "dependencies": {
     "lucide-react": "0.577.0",

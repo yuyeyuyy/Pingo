@@ -53,6 +53,7 @@ const api: PingoApi = {
   startLearning: () => invoke('startLearning'),
   skipPendingLearning: (sessionId) => invoke('skipPendingLearning', sessionId),
   getAnswerView: () => invoke('getAnswerView'),
+  getPronunciation: (target) => invoke('getPronunciation', target),
   submitAnswer: (request) => invoke('submitAnswer', request),
   setAnswerFavorite: (request) => invoke('setAnswerFavorite', request),
   rateAnswer: (request) => invoke('rateAnswer', request),

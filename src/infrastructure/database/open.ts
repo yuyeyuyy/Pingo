@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { DEFAULT_BANK_LANGUAGE } from '../../domain/language'
 import { writeTransaction } from './transaction'
 
 const migrations = [
@@ -151,6 +152,8 @@ const migrations = [
     WHERE card.key <= s.last_index AND json_extract(card.value, '$.key') = m.key
   )
   GROUP BY m.bank_id, pingo_study_subject(b.template, m.title, m.key)`,
+  `ALTER TABLE question_banks ADD COLUMN language TEXT;
+  UPDATE question_banks SET language = '${DEFAULT_BANK_LANGUAGE}' WHERE template = 'language'`,
 ]
 
 function migrate(database: DatabaseSync): void {

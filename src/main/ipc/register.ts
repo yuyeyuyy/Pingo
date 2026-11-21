@@ -5,8 +5,12 @@ import type { AppRuntime } from '../../application/app-info'
 import type { QuestionBankService } from '../../application/question-bank/service'
 import { bankTemplate } from '../../application/question-bank/validation'
 import type { SchedulerService } from '../../application/reminders/scheduler'
+import type { PronunciationService } from '../../application/pronunciation'
+import { RequestError } from '../../application/request-error'
+import { pronunciationForView } from '../../domain/session'
 import {
   pauseOption,
+  pronunciationTarget,
   rateAnswerRequest,
   reminderSettings,
   sessionId,
@@ -26,12 +30,13 @@ export function registerIpc(
   isTrusted: (event: IpcMainInvokeEvent, window: 'main' | 'answer') => boolean,
   banks: QuestionBankService,
   reminders: SchedulerService,
+  pronunciation: PronunciationService,
 ) {
   const handlers: {
     [K in keyof InvokeApi]: {
       arity: Parameters<InvokeApi[K]>['length']
       window?: 'answer'
-      run: (...args: unknown[]) => ApiResponse<K>
+      run: (...args: unknown[]) => ApiResponse<K> | Promise<ApiResponse<K>>
     }
   } = {
     getAppInfo: { arity: 0, run: () => getAppInfo(runtime) },
@@ -108,6 +113,27 @@ export function registerIpc(
     startLearning: { arity: 0, run: () => reminders.startLearning() },
     skipPendingLearning: { arity: 1, run: (input) => reminders.skipPending(sessionId(input)) },
     getAnswerView: { arity: 0, window: 'answer', run: () => reminders.answerView() },
+    getPronunciation: {
+      arity: 1,
+      window: 'answer',
+      run(input) {
+        const target = pronunciationTarget(input)
+        const view = reminders.answerView()
+        if (!view || view.kind === 'summary' || view.sessionId !== target.sessionId)
+          throw new RequestError('NOT_FOUND', '当前学习内容已切换。')
+        const matches =
+          'position' in target
+            ? view.kind === 'material' && view.position === target.position
+            : view.kind === 'question' && view.question.id === target.questionId
+        if (!matches) throw new RequestError('NOT_FOUND', '当前学习内容已切换。')
+        const lookup = pronunciationForView(
+          view,
+          'optionIndex' in target ? target.optionIndex : undefined,
+        )
+        if (!lookup) throw new RequestError('INVALID_ARGUMENTS', '此处没有可播放的发音。')
+        return pronunciation(lookup.language, lookup.word)
+      },
+    },
     submitAnswer: {
       arity: 1,
       window: 'answer',

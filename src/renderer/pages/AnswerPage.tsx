@@ -3,8 +3,9 @@ import { useState } from 'react'
 import type { FormEvent } from 'react'
 import type { PingoApi } from '../../shared/ipc'
 import { LANGUAGE_QUESTION_TYPES } from '../../shared/question-bank'
-import { SNOOZE_MINUTES } from '../../shared/reminders'
+import { pronunciationForView, SNOOZE_MINUTES } from '../../shared/reminders'
 import type { AnswerView } from '../../shared/reminders'
+import { PronunciationButton, usePronunciation } from '../components/reminders/Pronunciation'
 import { desktopError, useDesktopValue } from '../components/reminders/useDesktopValue'
 import {
   AnswerFields,
@@ -73,6 +74,8 @@ function MaterialStep({
 }) {
   const { sessionId, position, total, material } = view
   const { busy, error, run } = useStepAction()
+  const pronunciation = usePronunciation(api, view)
+  const canSpeak = pronunciationForView(view) !== undefined
   return (
     <main className="learning-window">
       <header className="learning-header">
@@ -88,8 +91,23 @@ function MaterialStep({
       </header>
       <div className="learning-form">
         <section className="learning-body study-material" aria-labelledby="material-title">
-          <h2 id="material-title">{material.title}</h2>
+          <h2 id="material-title" aria-label={canSpeak ? material.title : undefined}>
+            {canSpeak ? (
+              <PronunciationButton
+                word={material.title}
+                busy={pronunciation.pending === 'prompt'}
+                onPlay={() => void pronunciation.play()}
+              />
+            ) : (
+              material.title
+            )}
+          </h2>
           <p>{material.explanation}</p>
+          {pronunciation.message && (
+            <p className="bank-hint" role="status">
+              {pronunciation.message}
+            </p>
+          )}
           {material.examples.length > 0 && (
             <div className="study-material-examples">
               <h3>示例</h3>
@@ -133,6 +151,9 @@ function QuestionStep({ api, view }: { api: PingoApi; view: QuestionView }) {
   const [answer, setAnswer] = useState(() => initialAnswer(question))
   const { busy, error, run } = useStepAction()
   const target = { sessionId: view.sessionId, questionId: question.id }
+  const pronunciation = usePronunciation(api, view)
+  const promptWord =
+    question.kind === 'multiple-choice' ? question.pronunciation?.promptWord : undefined
   const final = position === total
 
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -171,14 +192,35 @@ function QuestionStep({ api, view }: { api: PingoApi; view: QuestionView }) {
       </header>
       <form className="learning-form" onSubmit={submit}>
         <div className="learning-body">
-          <h2>{question.prompt}</h2>
+          <h2 aria-label={promptWord ? question.prompt : undefined}>
+            {promptWord ? (
+              <>
+                {question.prompt.slice(0, promptWord.start)}
+                <PronunciationButton
+                  word={question.prompt.slice(promptWord.start, promptWord.end)}
+                  busy={pronunciation.pending === 'prompt'}
+                  onPlay={() => void pronunciation.play()}
+                />
+                {question.prompt.slice(promptWord.end)}
+              </>
+            ) : (
+              question.prompt
+            )}
+          </h2>
           <AnswerFields
             question={question}
             feedback={feedback}
             answer={answer}
             onAnswer={setAnswer}
             busy={busy}
+            onPlay={(index) => void pronunciation.play(index)}
+            pendingPronunciation={pronunciation.pending}
           />
+          {pronunciation.message && (
+            <p className="bank-hint" role="status">
+              {pronunciation.message}
+            </p>
+          )}
           {feedback && <FeedbackNote question={question} feedback={feedback} />}
           {feedback?.outcome === 'ungraded' && (
             <div className="bank-actions" aria-label="自评结果">

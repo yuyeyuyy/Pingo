@@ -1,6 +1,8 @@
 import { ArrowDown, ArrowUp } from 'lucide-react'
 import type { AnswerView, AnswerInput } from '../../../shared/reminders'
+import { spokenWord } from '../../../shared/reminders'
 import { BANK_LIMITS, PARTS_OF_SPEECH } from '../../../shared/question-bank'
+import { PronunciationButton } from './Pronunciation'
 
 type View = Extract<AnswerView, { kind: 'question' }>
 type Question = View['question']
@@ -32,12 +34,16 @@ export function AnswerFields({
   answer,
   onAnswer,
   busy,
+  onPlay,
+  pendingPronunciation,
 }: {
   question: Question
   feedback?: Feedback
   answer?: AnswerInput
   onAnswer(answer: AnswerInput): void
   busy: boolean
+  onPlay(index: number): void
+  pendingPronunciation: number | 'prompt' | null
 }) {
   const disabled = busy || !!feedback
   switch (question.kind) {
@@ -49,31 +55,51 @@ export function AnswerFields({
           ? answer.optionIndex
           : undefined
       return (
-        <fieldset className="learning-options" disabled={disabled}>
+        <fieldset className="learning-options">
           <legend className="bank-hint">请选择一项</legend>
           {question.options.map((label, index) => {
             const explanation = result?.optionExplanations?.[index]
             const part = result?.optionPartsOfSpeech?.[index]
+            const canPlay = spokenWord(question, feedback, index) !== undefined
+            const playOption = canPlay && question.languageType === 'meaning-to-word'
+            const playExplanation = canPlay && question.languageType === 'word-to-meaning'
             return (
-              <label
-                key={index}
-                className="learning-option"
-                data-correct={result?.correct === index}
-              >
-                <input
-                  type="radio"
-                  name="answer"
-                  checked={selected === index}
-                  onChange={() => onAnswer({ kind: question.kind, optionIndex: index })}
-                />
-                <span className="learning-option-label">{label}</span>
+              <div key={index} className="learning-option" data-correct={result?.correct === index}>
+                <label className="learning-option-choice">
+                  <input
+                    type="radio"
+                    name="answer"
+                    aria-label={label}
+                    disabled={disabled}
+                    checked={selected === index}
+                    onChange={() => onAnswer({ kind: question.kind, optionIndex: index })}
+                  />
+                  {!playOption && <span className="learning-option-label">{label}</span>}
+                </label>
+                {playOption && (
+                  <span className="learning-option-label">
+                    <PronunciationButton
+                      word={label}
+                      busy={pendingPronunciation === index}
+                      onPlay={() => onPlay(index)}
+                    />
+                  </span>
+                )}
                 {explanation && (
                   <span className="learning-option-meaning">
                     {part && <abbr title={PARTS_OF_SPEECH[part]}>{part}.</abbr>}
-                    <span>{explanation}</span>
+                    {playExplanation ? (
+                      <PronunciationButton
+                        word={explanation}
+                        busy={pendingPronunciation === index}
+                        onPlay={() => onPlay(index)}
+                      />
+                    ) : (
+                      <span>{explanation}</span>
+                    )}
                   </span>
                 )}
-              </label>
+              </div>
             )
           })}
         </fieldset>

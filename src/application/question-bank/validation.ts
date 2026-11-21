@@ -14,6 +14,8 @@ import { PRACTICE_SOURCES } from '../../domain/review'
 import type { PracticeSource } from '../../domain/review'
 import type { StudyMaterial } from '../../domain/study-material'
 import { normalizePartOfSpeech } from '../../domain/part-of-speech'
+import { DEFAULT_BANK_LANGUAGE, isBankLanguage } from '../../domain/language'
+import type { BankLanguage } from '../../domain/language'
 import { BANK_LIMITS } from '../../shared/question-bank'
 import { RequestError } from '../request-error'
 
@@ -66,6 +68,17 @@ export function bankTemplate(value: unknown): BankTemplate {
   if (typeof value !== 'string' || !Object.hasOwn(BANK_TEMPLATES, value))
     invalid('请选择有效的题库模板。')
   return value as BankTemplate
+}
+
+export function bankLanguage(template: BankTemplate, value: unknown): BankLanguage | undefined {
+  if (template !== 'language') {
+    if (value !== undefined) invalid('请为语言学习模板选择语言。')
+    return undefined
+  }
+  // Existing callers of createBank previously omitted the language.
+  if (value === undefined) return DEFAULT_BANK_LANGUAGE
+  if (!isBankLanguage(value)) invalid('请选择有效的题库语言。')
+  return value
 }
 
 function languageCategory(
@@ -171,6 +184,12 @@ export function questionDraft(value: unknown, template: BankTemplate = 'basic'):
       return { ...base, kind, items, correctOrder: order }
     }
     case 'multiple-choice': {
+      const headword =
+        languageType === 'word-to-meaning'
+          ? optionalText(data.headword, '题干单词', BANK_LIMITS.headword)
+          : undefined
+      if (headword && !prompt.toLowerCase().includes(headword.toLowerCase()))
+        invalid('题干单词须出现在题干中。')
       const options = list(
         data.options,
         '选项',
@@ -219,6 +238,7 @@ export function questionDraft(value: unknown, template: BankTemplate = 'basic'):
         kind,
         options,
         correctOptionIndex: correct,
+        ...(headword === undefined ? {} : { headword }),
         ...(optionExplanations === undefined ? {} : { optionExplanations }),
         ...(optionPartsOfSpeech === undefined ? {} : { optionPartsOfSpeech }),
       }

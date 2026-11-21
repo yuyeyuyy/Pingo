@@ -9,6 +9,8 @@ export {
   SNOOZE_MINUTES,
 } from '../domain/scheduling'
 export type { ReminderSettings, PauseOption, SessionMode } from '../domain/scheduling'
+export { pronunciationForView, spokenWord } from '../domain/session'
+export type { PronunciationView } from '../domain/session'
 export type { AnswerView, AnswerInput, SessionTarget, StudyMaterialTarget } from '../domain/session'
 export { DEFAULT_PRACTICE_SETTINGS } from '../domain/review'
 export type { PracticeSettings } from '../domain/review'

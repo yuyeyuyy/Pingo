@@ -143,9 +143,9 @@ it('grades different words and adds one level for spelling the same word', () =>
   ])
 })
 
-it('uses review, current and challenge roles with different concepts and reserves space for overdue reviews', () => {
+it('deduplicates concepts across pools and fills new slots in difficulty order', () => {
   const service = banks()
-  const { id } = service.createBank({ name: '词汇', template: 'basic' })
+  const { id } = service.createBank({ name: '词汇' })
   const add = (prompt: string, difficulty: Difficulty, conceptKey: string) =>
     service.createQuestion({
       bankId: id,
@@ -156,45 +156,16 @@ it('uses review, current and challenge roles with different concepts and reserve
   const current = add('pear 练习', 1, 'pear')
   add('pear 变体', 2, 'pear')
   const challenge = add('grape 挑战', 2, 'grape')
-  const progressWriter = createLearningProgressWriter(db)
-  progressWriter.recordAttempt({
+  createLearningProgressWriter(db).recordAttempt({
     questionId: review.id,
-    outcome: 'incorrect',
-    at: now - 10 * MINUTE,
+    outcome: 'correct',
+    at: now,
   })
-  const engine = createLearningEngine(db)
-  const scope = { bankId: id, source: 'all' } as const
-  expect(engine.pick(3, scope, now, false).questions.map((q) => q.id)).toEqual([
-    review.id,
-    current.id,
-  ])
-  db.prepare('INSERT INTO bank_learning_profiles VALUES (?, 1, 0, ?)').run(
-    id,
-    JSON.stringify(
-      Array.from({ length: 6 }, (_, index) => ({ id: String(index), correct: index < 4 })),
-    ),
-  )
-  const mix = engine.pick(3, scope, now, false).questions
-  expect(mix.map((q) => [q.id, q.learning?.role])).toEqual([
-    [review.id, 'review'],
-    [current.id, 'current'],
-    [challenge.id, 'challenge'],
-  ])
-  for (const [concept, offset] of [
-    ['banana', 2],
-    ['orange', 1],
-  ] as const) {
-    const item = add(concept, 1, concept)
-    progressWriter.recordAttempt({
-      questionId: item.id,
-      outcome: 'incorrect',
-      at: now - (10 + offset) * MINUTE,
-    })
-  }
-  expect(engine.pick(3, scope, now, false).questions.map((q) => q.learning?.role)).toEqual([
-    'review',
-    'review',
-    'current',
+  const picked = createLearningEngine(db).pick(3, { bankId: id, source: 'all' }, now).questions
+  expect(picked.map((q) => [q.id, q.learning?.role, q.learning?.pool])).toEqual([
+    [review.id, 'review', 'review-once'],
+    [current.id, 'current', 'new'],
+    [challenge.id, 'challenge', 'new'],
   ])
 })
 
@@ -214,17 +185,23 @@ it('persists promotion and demotion per bank and only calibrates current-level n
     practice: { bankId: bank.id, source: 'all', wrongEvery: 0 },
   })
   expect(service.status().learning).toEqual({ level: 1, dueCount: 0 })
-  for (let index = 0; index < 10; index++) {
-    service.startLearning()
-    study(service, { kind: 'short-answer', text: index < 8 ? 'ok' : 'no' })
+  const store = createReminderStore(db)
+  function completeUntilLevel(active: SchedulerService, target: Difficulty, correctCount: number) {
+    let newQuestions = 0
+    for (let round = 0; round < 40 && active.status().learning?.level !== target; round++) {
+      active.startLearning()
+      const plan = store.load()?.session?.questions[0]?.learning
+      const text = !plan?.calibrates || newQuestions++ < correctCount ? 'ok' : 'no'
+      study(active, { kind: 'short-answer', text })
+    }
+    expect(newQuestions).toBe(10)
+    expect(active.status().learning?.level).toBe(target)
   }
+  completeUntilLevel(service, 2, 8)
   const { service: restarted } = scheduler()
   restarted.start()
   expect(restarted.status().learning?.level).toBe(2)
-  for (let index = 0; index < 10; index++) {
-    restarted.startLearning()
-    study(restarted, { kind: 'short-answer', text: index < 5 ? 'ok' : 'no' })
-  }
+  completeUntilLevel(restarted, 1, 5)
   expect(restarted.status().learning?.level).toBe(1)
   restarted.startLearning()
   study(restarted, { kind: 'short-answer', text: 'ok' })
@@ -234,7 +211,7 @@ it('persists promotion and demotion per bank and only calibrates current-level n
   expect(createLearningEngine(db).status({ bankId: other.id, source: 'all' }, now).level).toBe(4)
 })
 
-it('does not fall back from a cooling wrong question, allows manual practice, and retains the due date on early success', () => {
+it('schedules a mistake in the next round and moves it to review once on a correct answer', () => {
   vi.useFakeTimers()
   const { id } = banks().createBank({ name: '主库' })
   const [wrong, fresh] = addQuestions(id, 2, 1)
@@ -250,35 +227,36 @@ it('does not fall back from a cooling wrong question, allows manual practice, an
   })
   service.startLearning()
   expect(study(service, { kind: 'unsure' })).toBe(wrong!.id)
-  const due = now + 10 * MINUTE
-  expect(progress(wrong!.id)).toEqual({ step: 0, due_at: due, last_attempt_at: now })
-  expect(service.status().learning?.dueCount).toBe(0)
+  expect(progress(wrong!.id)).toEqual({ step: 2, due_at: now, last_attempt_at: now })
   now += 5 * MINUTE
   vi.advanceTimersByTime(5 * MINUTE)
-  expect(service.status().notice).toBe('nothing-due')
-  expect(fixture.show).toHaveBeenCalledTimes(1)
+  expect(fixture.show).toHaveBeenCalledTimes(2)
   expect(progress(fresh!.id)).toBeUndefined()
+  expect(service.answerView()).toMatchObject({
+    kind: 'question',
+    question: { id: wrong!.id, pool: 'mistake' },
+  })
+  expect(study(service, { kind: 'short-answer', text: 'ok' })).toBe(wrong!.id)
+  expect(progress(wrong!.id)).toEqual({ step: 1, due_at: now, last_attempt_at: now })
+  service.updateSettings({
+    ...service.status().settings,
+    practice: { bankId: id, source: 'mistakes', wrongEvery: 0 },
+  })
   service.startLearning()
   expect(study(service, { kind: 'short-answer', text: 'ok' })).toBe(wrong!.id)
-  expect(progress(wrong!.id)).toEqual({ step: 0, due_at: due, last_attempt_at: now })
-  now = due
-  service.startLearning()
-  expect(study(service, { kind: 'short-answer', text: 'ok' })).toBe(wrong!.id)
-  expect(progress(wrong!.id)).toEqual({ step: 1, due_at: now + DAY, last_attempt_at: now })
+  expect(progress(wrong!.id)).toEqual({ step: 3, due_at: now, last_attempt_at: now })
   expect(banks().queryQuestions({ bankId: id, query: '', page: 0, source: 'mistakes' }).total).toBe(
     0,
   )
   const engine = createLearningEngine(db)
-  expect(engine.pick(3, { bankId: id, source: 'favorites' }, now, true).notice).toBe(
-    'empty-favorites',
-  )
+  expect(engine.pick(3, { bankId: id, source: 'favorites' }, now).notice).toBe('empty-favorites')
   expect(
-    engine.pick(3, { bankId: id, source: 'mistakes' }, now, false).questions.map((q) => q.id),
+    engine.pick(3, { bankId: id, source: 'mistakes' }, now).questions.map((q) => q.id),
   ).toEqual([fresh!.id])
   service.stop()
 })
 
-it('writes progress only on a graded result, caps due intervals, and cascades on deletion', () => {
+it('parks a correct first review and keeps recall out of the draw', () => {
   const { id } = banks().createBank({ name: '自评' })
   const { id: questionId } = banks().createQuestion({
     bankId: id,
@@ -291,34 +269,159 @@ it('writes progress only on a graded result, caps due intervals, and cascades on
   const { service } = scheduler()
   service.start()
   service.updateSettings({ ...service.status().settings, enabled: false })
-  service.startLearning()
-  const view = service.answerView()
-  if (view?.kind !== 'question') throw new Error('Expected a question')
-  const target = { sessionId: view.sessionId, questionId }
-  service.submit({ ...target, answer: { kind: 'short-answer', text: '固体变气体' } })
-  expect(progress(questionId)).toBeUndefined()
-  now += MINUTE
-  service.rateAnswer({ ...target, correct: true })
-  service.rateAnswer({ ...target, correct: false })
-  expect(progress(questionId)).toEqual({ step: 1, due_at: now + DAY, last_attempt_at: now })
-  service.advance(target)
-  for (const [index, interval] of [3, 7, 14, 30, 30].entries()) {
-    now = Number(progress(questionId)?.due_at)
-    expect(service.status().learning?.dueCount).toBe(1)
-    service.startLearning()
-    const next = service.answerView()
-    if (next?.kind !== 'question') throw new Error('Expected a due question')
-    const current = { sessionId: next.sessionId, questionId }
+
+  function complete(pool: string) {
+    const view = service.answerView()
+    if (view?.kind !== 'question') throw new Error('Expected a question')
+    expect(view.question).toMatchObject({ id: questionId, pool })
+    const current = { sessionId: view.sessionId, questionId }
     service.submit({ ...current, answer: { kind: 'short-answer', text: '固体变气体' } })
     service.rateAnswer({ ...current, correct: true })
+    service.rateAnswer({ ...current, correct: false })
     service.advance(current)
-    expect(progress(questionId)).toEqual({
-      step: Math.min(2 + index, 5),
-      due_at: now + interval * DAY,
-      last_attempt_at: now,
-    })
   }
+  service.startLearning()
+  const first = service.answerView()
+  if (first?.kind !== 'question') throw new Error('Expected the first question')
+  service.submit({
+    sessionId: first.sessionId,
+    questionId,
+    answer: { kind: 'short-answer', text: '固体变气体' },
+  })
+  expect(progress(questionId)).toBeUndefined()
+  complete('new')
+  expect(progress(questionId)).toEqual({ step: 1, due_at: now, last_attempt_at: now })
+  service.startLearning()
+  complete('review-once')
+  const parked = { step: 3, due_at: now, last_attempt_at: now }
+  expect(progress(questionId)).toEqual(parked)
+  expect(service.startLearning().notice).toBe('nothing-due')
+  now += 30 * DAY
+  const engine = createLearningEngine(db)
+  const selection = { bankId: id, source: 'all' } as const
+  expect(engine.pick(3, selection, now).questions).toEqual([])
+  expect(service.startLearning().notice).toBe('nothing-due')
+  expect(service.status().learning?.dueCount).toBe(0)
+  const writer = createLearningProgressWriter(db)
+  writer.recordAttempt({ questionId, outcome: 'incorrect', at: now })
+  writer.recordAttempt({ questionId, outcome: 'correct', at: now })
+  expect(progress(questionId)).toEqual(parked)
   banks().deleteBank({ bankId: id })
   expect(progress(questionId)).toBeUndefined()
   expect(db.prepare('SELECT count(*) AS count FROM bank_learning_profiles').get()?.count).toBe(0)
+})
+
+it('fills a ten-question round 4/3/3 and replaces shortages with new questions first', () => {
+  const { id } = banks().createBank({ name: '配额' })
+  const [once, mistakes, fresh] = [
+    addQuestions(id, 3, 1),
+    addQuestions(id, 3, 1),
+    addQuestions(id, 10, 1),
+  ] as const
+  const writer = createLearningProgressWriter(db)
+  const answer = (questionId: string, outcome: 'correct' | 'incorrect') =>
+    writer.recordAttempt({ questionId, outcome, at: now })
+  for (const question of once) answer(question.id, 'correct')
+  for (const question of mistakes) answer(question.id, 'incorrect')
+  const engine = createLearningEngine(db)
+  const selection = { bankId: id, source: 'all' } as const
+  const countPools = (time = now) => {
+    const counts = { new: 0, 'review-once': 0, mistake: 0, recall: 0 }
+    for (const question of engine.pick(10, selection, time).questions) {
+      counts[question.learning!.pool]++
+    }
+    return counts
+  }
+  expect(countPools()).toEqual({ new: 4, 'review-once': 3, mistake: 3, recall: 0 })
+  for (const question of mistakes) answer(question.id, 'correct')
+  expect(countPools()).toEqual({ new: 7, 'review-once': 3, mistake: 0, recall: 0 })
+  for (const question of once) answer(question.id, 'correct')
+  for (const question of fresh.slice(0, 3)) answer(question.id, 'incorrect')
+  expect(countPools(now + DAY)).toEqual({ new: 4, 'review-once': 3, mistake: 3, recall: 0 })
+  expect(engine.pick(20, selection, now + DAY).questions).toHaveLength(13)
+})
+
+it('rotates one-question rounds across all three practice pools', () => {
+  const { id } = banks().createBank({ name: '每轮一道' })
+  const [once, mistake] = addQuestions(id, 3, 1)
+  if (!once || !mistake) throw new Error('Expected seeded questions')
+  const writer = createLearningProgressWriter(db)
+  writer.recordAttempt({ questionId: once.id, outcome: 'correct', at: now })
+  writer.recordAttempt({ questionId: mistake.id, outcome: 'incorrect', at: now })
+  const engine = createLearningEngine(db)
+  const selection = { bankId: id, source: 'all' } as const
+  const pools = Array.from(
+    { length: 10 },
+    (_, round) => engine.pick(1, selection, now, round).questions[0]?.learning?.pool,
+  )
+  expect(pools.filter((pool) => pool === 'new')).toHaveLength(4)
+  expect(pools.filter((pool) => pool === 'review-once')).toHaveLength(3)
+  expect(pools.filter((pool) => pool === 'mistake')).toHaveLength(3)
+})
+
+it('migrates saved progress and removes the retired review interval from v12 settings', () => {
+  const { id } = banks().createBank({ name: '旧复习进度' })
+  const [once, twice, recall, retry] = addQuestions(id, 4, 1)
+  db.exec(`
+    ALTER TABLE question_learning ADD COLUMN last_correct_round INTEGER;
+    PRAGMA user_version = 12;
+  `)
+  const insert = db.prepare('INSERT INTO question_learning VALUES (?, ?, ?, ?, ?)')
+  insert.run(once!.id, 1, now + DAY, now, 6)
+  insert.run(twice!.id, 2, now + 3 * DAY, now, 5)
+  insert.run(recall!.id, 3, now + 7 * DAY, now, 4)
+  insert.run(retry!.id, 0, now + 10 * MINUTE, now, null)
+  db.prepare('INSERT INTO correctly_answered_questions VALUES (?)').run(retry!.id)
+  db.prepare('INSERT INTO reminder_state VALUES (1, ?)').run(
+    JSON.stringify({
+      settings: { strategy: 'progressive', reviewAfterRounds: 3 },
+      completedRounds: 7,
+      session: null,
+    }),
+  )
+
+  db.close()
+  db = openDatabase(directory)
+  expect(progress(once!.id)).toMatchObject({ step: 1, due_at: now })
+  expect(progress(twice!.id)).toMatchObject({ step: 1, due_at: now })
+  expect(progress(recall!.id)).toMatchObject({ step: 3, due_at: now + DAY })
+  expect(progress(retry!.id)).toMatchObject({ step: 2, due_at: now })
+  expect(createReminderStore(db).load()).toEqual({
+    settings: { strategy: 'progressive' },
+    completedRounds: 7,
+    session: null,
+  })
+})
+
+it('migrates old second reviews and mistakes without discarding the current session', () => {
+  const { id } = banks().createBank({ name: '旧题池' })
+  const [review, mistake, fresh] = addQuestions(id, 3, 1)
+  if (!review || !mistake || !fresh) throw new Error('Expected seeded questions')
+  const progressRow = db.prepare('INSERT INTO question_learning VALUES (?, ?, ?, ?)')
+  progressRow.run(review.id, 2, now, now)
+  progressRow.run(mistake.id, 2, now + 10 * MINUTE, now)
+  db.prepare('INSERT INTO wrong_questions VALUES (?, 0)').run(mistake.id)
+  const snapshot = {
+    session: {
+      questions: [
+        { id: review.id, learning: { pool: 'review-twice' } },
+        { id: fresh.id, learning: { pool: 'new' } },
+      ],
+      index: 1,
+    },
+  }
+  db.prepare('INSERT INTO reminder_state VALUES (1, ?)').run(JSON.stringify(snapshot))
+  db.exec('PRAGMA user_version = 13')
+  db.close()
+  db = openDatabase(directory)
+
+  expect(progress(review.id)).toMatchObject({ step: 1, due_at: now })
+  expect(progress(mistake.id)).toMatchObject({ step: 2, due_at: now })
+  expect(createReminderStore(db).load()?.session).toEqual({
+    ...snapshot.session,
+    questions: [
+      { id: review.id, learning: { pool: 'review-once' } },
+      snapshot.session.questions[1],
+    ],
+  })
 })

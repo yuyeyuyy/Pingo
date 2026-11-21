@@ -191,7 +191,7 @@ it('rolls back the saved answer, wrong book, and review schedule together', () =
   ).toEqual([])
   db.exec('DROP TRIGGER reject_state')
   scheduler.submit({ ...target, answer: wrong })
-  expect(progress.get(target.questionId)?.step).toBe(0)
+  expect(progress.get(target.questionId)?.step).toBe(2)
   expect(
     banks.queryQuestions({ bankId: bank.id, source: 'mistakes', page: 0, query: '' }).total,
   ).toBe(1)

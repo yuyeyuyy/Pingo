@@ -6,10 +6,9 @@ import {
   afterGradedAnswer,
   availableLevel,
   calibrate,
-  CHALLENGE_CORRECT,
-  CHALLENGE_SAMPLES,
   chooseProgressiveRound,
-  chooseStudyRound,
+  FIRST_RECALL_STEP,
+  poolForStep,
 } from '../../domain/progressive-learning'
 import type {
   CalibrationSample,
@@ -65,81 +64,65 @@ export function createLearningEngine(database: DatabaseSync): LearningEngine {
     return {
       exists: database.prepare(`SELECT 1 FROM questions q ${join} WHERE ${scope} LIMIT 1`),
       due: database.prepare(`
-        SELECT
-          (SELECT count(*) FROM question_learning l
-            JOIN questions q ON q.id = l.question_id ${join}
-            WHERE l.due_at <= :now AND ${scope})
-          + (SELECT count(*) FROM wrong_questions legacy
-            JOIN questions q ON q.id = legacy.question_id ${join}
-            WHERE ${scope} AND NOT EXISTS
-              (SELECT 1 FROM question_learning l WHERE l.question_id = q.id)) AS count
+        SELECT count(*) AS count
+        FROM question_learning l JOIN questions q ON q.id = l.question_id ${join}
+        WHERE l.step < ${FIRST_RECALL_STEP} AND l.due_at <= :now AND ${scope}
       `),
       pick: database.prepare(`
         WITH scoped AS MATERIALIZED (
           SELECT q.id, q.bank_id, q.effective_difficulty AS difficulty,
-                 CASE WHEN :study = 0 THEN q.concept_key END AS concept_key,
-                 CASE WHEN :study = 1 THEN pingo_study_subject(b.template, m.title, m.key) END AS subject_key,
-                 seen.last_seen_at,
-                 q.rowid AS ordinal, l.due_at, legacy.question_id IS NOT NULL AS was_wrong
+            CASE WHEN :study = 0 THEN q.concept_key END AS concept_key,
+            CASE WHEN :study = 1 THEN pingo_study_subject(b.template, m.title, m.key) END AS subject_key,
+            seen.last_seen_at, q.rowid AS ordinal, l.due_at,
+            coalesce(l.step, 0) AS pool
           FROM questions q ${join}
           LEFT JOIN question_learning l ON l.question_id = q.id
-          LEFT JOIN wrong_questions legacy ON legacy.question_id = q.id AND l.question_id IS NULL
           LEFT JOIN study_materials m ON :study = 1 AND m.id = q.material_id
           LEFT JOIN question_banks b ON :study = 1 AND b.id = q.bank_id
-          LEFT JOIN study_material_progress seen ON :study = 1 AND seen.bank_id = q.bank_id
+          LEFT JOIN study_material_progress seen ON seen.bank_id = q.bank_id
             AND seen.subject_key = pingo_study_subject(b.template, m.title, m.key)
           WHERE ${scope}
         ), pool_levels AS (
           SELECT s.bank_id,
             coalesce(max(CASE WHEN s.difficulty <= p.level THEN s.difficulty END), min(s.difficulty)) AS level,
-            p.level AS saved_level, coalesce(p.epoch, 0) AS epoch, p.samples_json
+            coalesce(p.epoch, 0) AS epoch
           FROM scoped s LEFT JOIN bank_learning_profiles p ON p.bank_id = s.bank_id
-          GROUP BY s.bank_id
-        ), unseen AS (
-          SELECT s.bank_id,
-            max(s.difficulty = p.level) AS has_current, min(CASE WHEN s.difficulty > p.level THEN s.difficulty END) AS higher
-          FROM scoped s JOIN pool_levels p ON p.bank_id = s.bank_id
-          WHERE s.due_at IS NULL AND NOT s.was_wrong
           GROUP BY s.bank_id
         ), classified AS (
           SELECT s.*, p.level, p.epoch,
             CASE
-              WHEN s.was_wrong OR s.due_at <= :now THEN 'review'
-              WHEN s.due_at IS NOT NULL THEN CASE WHEN :allowEarly THEN 'early' END
+              WHEN s.due_at IS NOT NULL THEN 'review'
               WHEN s.difficulty <= p.level THEN 'current'
-              WHEN :study = 1 THEN 'challenge'
-              WHEN s.difficulty = u.higher AND (
-                NOT u.has_current OR (
-                  s.difficulty = p.level + 1 AND p.level = p.saved_level
-                  AND json_array_length(p.samples_json) >= ${CHALLENGE_SAMPLES}
-                  AND (SELECT count(*) FROM json_each(p.samples_json)
-                       WHERE json_extract(value, '$.correct') = 1) >= ${CHALLENGE_CORRECT}
-                )
-              ) THEN 'challenge'
+              ELSE 'challenge'
             END AS role
           FROM scoped s JOIN pool_levels p ON p.bank_id = s.bank_id
-          LEFT JOIN unseen u ON u.bank_id = s.bank_id
+          WHERE s.pool < ${FIRST_RECALL_STEP}
+            AND (s.due_at IS NULL OR s.due_at <= :now)
         ), distinct_variants AS (
           SELECT *, row_number() OVER (
-            PARTITION BY
-              CASE WHEN subject_key IS NULL THEN role END,
-              CASE WHEN subject_key IS NOT NULL THEN bank_id END,
-              subject_key, concept_key,
+            PARTITION BY pool,
+              CASE WHEN subject_key IS NOT NULL THEN bank_id END, subject_key, concept_key,
               CASE WHEN subject_key IS NULL AND concept_key IS NULL THEN id END
-            ORDER BY CASE role WHEN 'review' THEN 0 WHEN 'current' THEN 1 WHEN 'challenge' THEN 2 ELSE 3 END,
-              due_at, CASE role WHEN 'current' THEN -difficulty ELSE difficulty END, ordinal
+            ORDER BY
+              CASE WHEN pool = 0 THEN last_seen_at END NULLS FIRST,
+              CASE role WHEN 'review' THEN 0 WHEN 'current' THEN 1 WHEN 'challenge' THEN 2 ELSE 3 END,
+              due_at,
+              CASE role WHEN 'current' THEN -difficulty ELSE difficulty END, ordinal
           ) AS variant
-          FROM classified WHERE role IS NOT NULL
+          FROM classified
         ), ranked AS (
           SELECT *, row_number() OVER (
-            PARTITION BY role ORDER BY
-              CASE WHEN role <> 'early' THEN last_seen_at END NULLS FIRST,
-              due_at, CASE role WHEN 'current' THEN -difficulty ELSE difficulty END, ordinal
+            PARTITION BY pool
+            ORDER BY
+              CASE WHEN pool = 0 THEN last_seen_at END NULLS FIRST,
+              CASE role WHEN 'review' THEN 0 WHEN 'current' THEN 1 WHEN 'challenge' THEN 2 ELSE 3 END,
+              due_at,
+              CASE role WHEN 'current' THEN -difficulty ELSE difficulty END, ordinal
           ) AS priority
           FROM distinct_variants WHERE variant = 1
         )
-        SELECT id, bank_id, difficulty, concept_key, level, epoch, role, last_seen_at
-        FROM ranked WHERE priority <= :count ORDER BY priority
+        SELECT id, bank_id, difficulty, concept_key, subject_key, level, epoch, role, pool
+        FROM ranked WHERE priority <= :count ORDER BY priority, due_at NULLS LAST
       `),
     }
   }
@@ -163,7 +146,7 @@ export function createLearningEngine(database: DatabaseSync): LearningEngine {
   }
 
   return {
-    pick(count, selection, now, allowEarly) {
+    pick(count, selection, now, completedRounds = 0) {
       const { statements, parameters } = scopeFor(selection)
       if (!statements.exists.get(parameters)) {
         return {
@@ -175,24 +158,21 @@ export function createLearningEngine(database: DatabaseSync): LearningEngine {
               : 'empty-bank',
         }
       }
-      const candidates = statements.pick
-        .all({ ...parameters, count, now, allowEarly: Number(allowEarly) })
-        .map(
-          (row): LearningCandidate => ({
-            id: String(row.id),
-            bankId: String(row.bank_id),
-            ...(typeof row.concept_key === 'string' ? { conceptKey: row.concept_key } : {}),
-            ...(typeof row.last_seen_at === 'number' ? { materialSeenAt: row.last_seen_at } : {}),
-            difficulty: row.difficulty as Difficulty,
-            level: row.level as Difficulty,
-            epoch: Number(row.epoch),
-            role: row.role as LearningCandidate['role'],
-          }),
-        )
-      const picked = selection.requiresMaterial
-        ? chooseStudyRound(candidates, count)
-        : chooseProgressiveRound(candidates, count)
-      const questions = picked.map(({ id, bankId, difficulty, level, epoch, role }) => {
+      const candidates = statements.pick.all({ ...parameters, now, count }).map(
+        (row): LearningCandidate => ({
+          id: String(row.id),
+          bankId: String(row.bank_id),
+          ...(typeof row.concept_key === 'string' ? { conceptKey: row.concept_key } : {}),
+          ...(typeof row.subject_key === 'string' ? { subjectKey: row.subject_key } : {}),
+          difficulty: row.difficulty as Difficulty,
+          level: row.level as Difficulty,
+          epoch: Number(row.epoch),
+          role: row.role as LearningCandidate['role'],
+          pool: poolForStep(Number(row.pool)),
+        }),
+      )
+      const picked = chooseProgressiveRound(candidates, count, completedRounds)
+      const questions = picked.map(({ id, bankId, difficulty, level, epoch, role, pool }) => {
         const row = question.get(id)!
         return {
           ...withPartsOfSpeech(questionFromRow(row), bankId),
@@ -204,6 +184,7 @@ export function createLearningEngine(database: DatabaseSync): LearningEngine {
             level,
             epoch,
             role,
+            pool,
             calibrates: selection.source === 'all' && role === 'current' && difficulty === level,
           },
         }
@@ -223,9 +204,7 @@ export function createLearningEngine(database: DatabaseSync): LearningEngine {
 /** These writes are part of the existing answer and round-completion transactions. */
 export function createLearningProgressWriter(database: DatabaseSync) {
   const { read } = profiles(database)
-  const previous = database.prepare(
-    'SELECT step, due_at, last_attempt_at FROM question_learning WHERE question_id = ?',
-  )
+  const previous = database.prepare('SELECT step FROM question_learning WHERE question_id = ?')
   const saveAttempt = database.prepare(`
     INSERT INTO question_learning (question_id, step, due_at, last_attempt_at)
     SELECT id, ?, ?, ? FROM questions WHERE id = ?
@@ -244,19 +223,9 @@ export function createLearningProgressWriter(database: DatabaseSync) {
   return {
     recordAttempt({ questionId, outcome, at }: ReviewAttempt) {
       if (outcome === 'ungraded') return
-      const row = previous.get(questionId)
-      const progress = afterGradedAnswer(
-        row
-          ? {
-              step: Number(row.step),
-              dueAt: Number(row.due_at),
-              lastAttemptAt: Number(row.last_attempt_at),
-            }
-          : undefined,
-        outcome,
-        at,
-      )
-      saveAttempt.run(progress.step, progress.dueAt, progress.lastAttemptAt, questionId)
+      const step = Number(previous.get(questionId)?.step ?? 0)
+      const progress = afterGradedAnswer(step, outcome, at)
+      if (progress) saveAttempt.run(progress.step, progress.dueAt, at, questionId)
     },
     recordCompleted(session: LearningSession) {
       if (session.strategy !== 'progressive') return

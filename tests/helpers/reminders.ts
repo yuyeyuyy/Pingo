@@ -30,6 +30,7 @@ export function schedulerFixture(overrides: Partial<SchedulerDependencies> = {})
   let state: ReminderState | undefined
   const history: EndedSession[] = []
   const favorites = new Set<string>()
+  const correctlyAnswered = new Set<string>()
   let ids = 0
   const system: ReturnType<SchedulerDependencies['system']> = {
     idle: false,
@@ -43,10 +44,12 @@ export function schedulerFixture(overrides: Partial<SchedulerDependencies> = {})
   const dependencies: SchedulerDependencies = {
     store: {
       load: () => state && structuredClone(state),
-      save(next, { ended } = {}) {
+      save(next, { ended, review } = {}) {
         state = structuredClone(next)
         if (ended) history.push(structuredClone(ended))
+        if (review?.outcome === 'correct') correctlyAnswered.add(review.questionId)
       },
+      correctlyAnsweredQuestionIds: (ids) => new Set(ids.filter((id) => correctlyAnswered.has(id))),
       isFavorite: (id) => favorites.has(id),
       setFavorite(id, favorite) {
         if (favorite) favorites.add(id)

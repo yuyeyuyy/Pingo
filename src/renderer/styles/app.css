@@ -743,6 +743,16 @@ dd {
   overflow-wrap: anywhere;
 }
 
+.learning-pool {
+  display: inline-block;
+  margin-inline-start: 0.55em;
+  padding: 1px 7px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 0.85em;
+  white-space: nowrap;
+}
+
 .learning-form {
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;

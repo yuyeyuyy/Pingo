@@ -154,6 +154,73 @@ const migrations = [
   GROUP BY m.bank_id, pingo_study_subject(b.template, m.title, m.key)`,
   `ALTER TABLE question_banks ADD COLUMN language TEXT;
   UPDATE question_banks SET language = '${DEFAULT_BANK_LANGUAGE}' WHERE template = 'language'`,
+  `CREATE TABLE correctly_answered_questions (
+    question_id TEXT PRIMARY KEY NOT NULL REFERENCES questions(id) ON DELETE CASCADE
+  ) STRICT;
+
+  WITH previous_answers(question_id) AS (
+    SELECT question_id FROM question_learning WHERE step > 0
+    UNION
+    SELECT json_extract(answer.value, '$.questionId')
+    FROM learning_history h JOIN json_each(h.payload, '$.answers') answer
+    WHERE json_extract(answer.value, '$.feedback.outcome') = 'correct'
+    UNION
+    SELECT json_extract(answer.value, '$.questionId')
+    FROM reminder_state s JOIN json_each(s.payload, '$.session.answers') answer
+    WHERE json_extract(answer.value, '$.feedback.outcome') = 'correct'
+  )
+  INSERT INTO correctly_answered_questions (question_id)
+  SELECT q.id FROM previous_answers a JOIN questions q ON q.id = a.question_id`,
+  `ALTER TABLE question_learning ADD COLUMN last_correct_round INTEGER CHECK (last_correct_round >= 0)`,
+  `CREATE TABLE question_learning_v13 (
+    question_id TEXT PRIMARY KEY NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+    step INTEGER NOT NULL CHECK (step BETWEEN 0 AND 7),
+    due_at INTEGER NOT NULL,
+    last_attempt_at INTEGER NOT NULL
+  ) STRICT;
+
+  INSERT INTO question_learning_v13 (question_id, step, due_at, last_attempt_at)
+  SELECT l.question_id, CASE WHEN l.step = 0 AND c.question_id IS NOT NULL THEN 1 ELSE l.step END,
+    CASE
+      WHEN l.step BETWEEN 1 AND 2 OR l.last_correct_round IS NOT NULL AND l.step = 0 THEN l.last_attempt_at
+      WHEN l.step = 3 THEN min(l.due_at, l.last_attempt_at + 86400000)
+      WHEN l.step = 4 THEN min(l.due_at, l.last_attempt_at + 259200000)
+      WHEN l.step = 5 THEN min(l.due_at, l.last_attempt_at + 604800000)
+      ELSE l.due_at
+    END, l.last_attempt_at
+  FROM question_learning l LEFT JOIN correctly_answered_questions c ON c.question_id = l.question_id;
+
+  INSERT OR IGNORE INTO question_learning_v13 (question_id, step, due_at, last_attempt_at)
+  SELECT question_id, 1, 0, 0 FROM correctly_answered_questions;
+
+  DROP TABLE question_learning;
+  ALTER TABLE question_learning_v13 RENAME TO question_learning;
+  CREATE INDEX question_learning_due ON question_learning (due_at);
+  UPDATE reminder_state SET payload = json_remove(payload, '$.settings.reviewAfterRounds')
+  WHERE json_type(payload, '$.settings.reviewAfterRounds') IS NOT NULL`,
+  `UPDATE question_learning AS l SET
+    step = CASE
+      WHEN l.step = 0 OR l.due_at > l.last_attempt_at OR EXISTS (
+        SELECT 1 FROM wrong_questions w WHERE w.question_id = l.question_id AND w.consecutive_correct = 0
+      ) THEN 2
+      ELSE 1
+    END,
+    due_at = l.last_attempt_at
+  WHERE l.step < 3;
+
+  INSERT OR IGNORE INTO question_learning (question_id, step, due_at, last_attempt_at)
+  SELECT question_id, CASE WHEN consecutive_correct = 0 THEN 2 ELSE 1 END, 0, 0 FROM wrong_questions;
+
+  UPDATE reminder_state SET payload = json_set(payload, '$.session.questions', json((
+    SELECT json_group_array(json(CASE
+      WHEN json_extract(question.value, '$.learning.pool') = 'review-twice'
+      THEN json_set(question.value, '$.learning.pool', 'review-once')
+      ELSE question.value END) ORDER BY question.key)
+    FROM json_each(payload, '$.session.questions') question
+  ))) WHERE EXISTS (
+    SELECT 1 FROM json_each(payload, '$.session.questions') question
+    WHERE json_extract(question.value, '$.learning.pool') = 'review-twice'
+  )`,
 ]
 
 function migrate(database: DatabaseSync): void {

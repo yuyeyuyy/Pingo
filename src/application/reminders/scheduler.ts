@@ -41,6 +41,7 @@ export interface ReminderState {
   nextAt: number | null
   session: LearningSession | null
   completedInCycle?: number
+  completedRounds?: number
   pronunciation?: PronunciationPreferences
 }
 
@@ -59,6 +60,7 @@ export interface ReminderEffects {
 export interface ReminderStore {
   load(): ReminderState | undefined
   save(state: ReminderState, effects?: ReminderEffects): void
+  correctlyAnsweredQuestionIds(questionIds: readonly string[]): ReadonlySet<string>
   isFavorite(questionId: string): boolean
   setFavorite(questionId: string, favorite: boolean): boolean
 }
@@ -66,6 +68,7 @@ export interface ReminderStore {
 export interface SchedulerDependencies {
   store: ReminderStore
   learning?: LearningEngine
+  /** Returns the linked materials in the same order as the question IDs. */
   studyMaterials?(questionIds: readonly string[]): readonly SessionStudyMaterial[]
   questions(count: number, selection: LearningSelection): readonly SessionQuestion[]
   makeId(): string
@@ -255,7 +258,7 @@ export class SchedulerService {
     if (current?.stage === 'active') {
       this.present(true)
     } else {
-      const session = current ?? this.makeSession(true)
+      const session = current ?? this.makeSession()
       if (session) this.open(session, true)
     }
     return this.status()
@@ -385,23 +388,39 @@ export class SchedulerService {
       : null
   }
 
-  private makeSession(allowEarly = false): LearningSession | null {
+  private makeSession(): LearningSession | null {
     const { questionsPerSession: count, strategy = 'random' } = this.state.settings
     const practice = this.practice()
     const selection = this.selection()
     const now = this.dependencies.now()
     const planned =
       strategy === 'progressive'
-        ? this.dependencies.learning?.pick(count, selection, now, allowEarly)
+        ? this.dependencies.learning?.pick(count, selection, now, this.state.completedRounds)
         : undefined
     const available = planned?.questions ?? this.sampleRandom(count, selection)
     const questions = [
       ...new Map(available.map((question) => [question.id, question])).values(),
     ].slice(0, count)
-    const materials = selection.requiresMaterial
-      ? (this.dependencies.studyMaterials?.(questions.map(({ id }) => id)) ?? [])
-      : undefined
-    if (!questions.length || (materials && materials.length !== questions.length)) {
+    let study: LearningSession['study']
+    let missingMaterials = false
+    if (selection.requiresMaterial && questions.length) {
+      const correctlyAnswered = this.dependencies.store.correctlyAnsweredQuestionIds(
+        questions.map(({ id }) => id),
+      )
+      const materialIds = questions
+        .filter(
+          ({ id, learning }) =>
+            learning?.pool === 'mistake' ||
+            ((!learning?.pool || learning.pool === 'new') && !correctlyAnswered.has(id)),
+        )
+        .map(({ id }) => id)
+      const materials = materialIds.length
+        ? (this.dependencies.studyMaterials?.(materialIds) ?? [])
+        : []
+      missingMaterials = materials.length !== materialIds.length
+      study = { materials, index: 0 }
+    }
+    if (!questions.length || missingMaterials) {
       this.notice =
         planned?.notice ??
         (selection.requiresMaterial
@@ -421,7 +440,7 @@ export class SchedulerService {
       answers: [],
       practice,
       strategy,
-      ...(materials ? { study: { materials, index: 0 } } : {}),
+      ...(study ? { study } : {}),
     }
   }
 
@@ -448,7 +467,16 @@ export class SchedulerService {
         ? ((this.state.completedInCycle ?? 0) + 1) % practice.wrongEvery
         : this.state.completedInCycle
     this.commit(
-      { ...this.state, session: null, nextAt: this.nextRegular(at), completedInCycle },
+      {
+        ...this.state,
+        session: null,
+        nextAt: this.nextRegular(at),
+        completedInCycle,
+        completedRounds:
+          outcome === 'completed'
+            ? (this.state.completedRounds ?? 0) + 1
+            : this.state.completedRounds,
+      },
       { ended, summary },
     )
     this.dismiss()

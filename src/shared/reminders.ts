@@ -18,6 +18,7 @@ export type { AnswerView, AnswerInput, SessionTarget, StudyMaterialTarget } from
 export { DEFAULT_PRACTICE_SETTINGS } from '../domain/review'
 export type { PracticeSettings } from '../domain/review'
 export type { LearningStrategy } from '../domain/progressive-learning'
+export { LEARNING_POOLS } from '../domain/progressive-learning'
 
 export interface ReminderStatus {
   phase: SchedulerPhase

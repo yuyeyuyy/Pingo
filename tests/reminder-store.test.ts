@@ -91,7 +91,7 @@ it('keeps v3 bank and question IDs, saved sessions, and history when adding bank
 
   const migrated = openDatabase(oldFolder)
   try {
-    expect(migrated.prepare('PRAGMA user_version').get()?.user_version).toBe(10)
+    expect(migrated.prepare('PRAGMA user_version').get()?.user_version).toBe(14)
     expect(createReminderStore(migrated).load()?.session).toEqual(snapshot)
     expect(
       migrated.prepare("SELECT payload FROM learning_history WHERE session_id = 'done'").get()

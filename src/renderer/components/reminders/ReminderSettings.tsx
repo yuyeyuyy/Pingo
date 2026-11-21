@@ -180,9 +180,11 @@ function ReminderForm({ settings, api }: { settings: Settings; api: PingoApi }) 
               <option value="study">学习模式</option>
             </select>
             <span className="bank-hint">
-              {draft.sessionMode === 'study'
-                ? '优先展示没学过的内容，每份资料对应一道练习题。'
-                : '直接开始答题。'}
+              {draft.sessionMode !== 'study'
+                ? '直接开始答题。'
+                : draft.strategy === 'progressive'
+                  ? '新题和错题先看资料，复习一次的题直接作答。'
+                  : '优先学习新内容。答对过的题再次抽到时直接练习。'}
             </span>
           </label>
           <label className="bank-field">
@@ -199,6 +201,9 @@ function ReminderForm({ settings, api }: { settings: Settings; api: PingoApi }) 
             </select>
           </label>
         </div>
+        {draft.strategy === 'progressive' && (
+          <p className="bank-hint">每轮约 40% 新题、30% 复习一次、30% 错题。</p>
+        )}
         {banksError && (
           <p className="bank-error" role="alert">
             {banksError}
@@ -442,7 +447,7 @@ function ReminderControls({ api, status }: { api: PingoApi; status: ReminderStat
           </p>
         )}
         {status.notice === 'nothing-due' && (
-          <p className="bank-hint">当前没有到期题或合适的新题。可以点「立即学习」提前练一道。</p>
+          <p className="bank-hint">当前没有可抽取的新题或到期的复习题。</p>
         )}
       </div>
       <div className="bank-actions">

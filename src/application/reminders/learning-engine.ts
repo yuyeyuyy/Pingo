@@ -11,7 +11,7 @@ export interface LearningEngine {
     count: number,
     selection: LearningSelection,
     now: number,
-    allowEarly: boolean,
+    completedRounds?: number,
   ): { questions: readonly SessionQuestion[]; notice: LearningNotice | null }
   status(selection: LearningSelection, now: number): LearningStatus
 }

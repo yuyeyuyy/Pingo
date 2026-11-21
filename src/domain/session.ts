@@ -1,7 +1,7 @@
 import { BLANK_MARKER, isPermutation } from './question'
 import type { LanguageQuestionType, Question } from './question'
 import type { PracticeSettings } from './review'
-import type { LearningQuestionPlan, LearningStrategy } from './progressive-learning'
+import type { LearningPool, LearningQuestionPlan, LearningStrategy } from './progressive-learning'
 import type { SessionStage } from './scheduling'
 import type { PartOfSpeech } from './part-of-speech'
 import type { StudyMaterial, StudySubject } from './study-material'
@@ -76,6 +76,7 @@ export type VisibleQuestion = {
   bankName: string
   prompt: string
   languageType?: LanguageQuestionType
+  pool?: LearningPool
 } & (
   | {
       kind: 'multiple-choice'
@@ -181,6 +182,7 @@ function visibleQuestion(question: SessionQuestion): VisibleQuestion {
     bankName: question.bankName,
     prompt: question.prompt,
     languageType: question.languageType,
+    ...(question.learning?.pool ? { pool: question.learning.pool } : {}),
   }
   switch (question.kind) {
     case 'multiple-choice': {

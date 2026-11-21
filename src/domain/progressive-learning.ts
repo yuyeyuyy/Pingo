@@ -1,7 +1,7 @@
 import type { Difficulty } from './question'
 
 export type LearningStrategy = 'random' | 'progressive'
-export type LearningRole = 'review' | 'current' | 'challenge' | 'early'
+export type LearningRole = 'review' | 'current' | 'challenge'
 export type LearningNotice = 'empty-bank' | 'empty-favorites' | 'empty-study' | 'nothing-due'
 
 export interface LearningStatus {
@@ -9,47 +9,51 @@ export interface LearningStatus {
   dueCount: number
 }
 
+export const LEARNING_POOLS = {
+  new: '新题',
+  'review-once': '复习一次',
+  mistake: '错题',
+  recall: '回忆',
+} as const
+export type LearningPool = keyof typeof LEARNING_POOLS
+
 export interface LearningQuestionPlan {
   bankId: string
   difficulty: Difficulty
   level: Difficulty
   epoch: number
   role: LearningRole
+  pool: LearningPool
   calibrates: boolean
 }
 
 export interface LearningCandidate extends Omit<LearningQuestionPlan, 'calibrates'> {
   id: string
   conceptKey?: string
-  materialSeenAt?: number
+  subjectKey?: string
 }
 
-export const REVIEW_DELAYS = [
-  10 * 60_000,
-  86_400_000,
-  3 * 86_400_000,
-  7 * 86_400_000,
-  14 * 86_400_000,
-  30 * 86_400_000,
-] as const
+export const FIRST_RECALL_STEP = 3
 
-export interface ReviewProgress {
-  step: number
-  dueAt: number
-  lastAttemptAt: number
-}
-
-export function afterGradedAnswer(
-  previous: ReviewProgress | undefined,
-  outcome: 'correct' | 'incorrect',
-  at: number,
-): ReviewProgress {
-  if (outcome === 'correct' && previous && at < previous.dueAt) {
-    return { ...previous, lastAttemptAt: at }
+export function poolForStep(step: number): LearningPool {
+  switch (step) {
+    case 0:
+      return 'new'
+    case 1:
+      return 'review-once'
+    case 2:
+      return 'mistake'
+    default:
+      return 'recall'
   }
-  const step =
-    outcome === 'incorrect' ? 0 : Math.min((previous?.step ?? 0) + 1, REVIEW_DELAYS.length - 1)
-  return { step, dueAt: at + REVIEW_DELAYS[step]!, lastAttemptAt: at }
+}
+
+export function afterGradedAnswer(step: number, outcome: 'correct' | 'incorrect', at: number) {
+  if (step >= FIRST_RECALL_STEP) return undefined
+  if (outcome === 'incorrect') {
+    return { step: 2, dueAt: at }
+  }
+  return { step: step === 1 ? FIRST_RECALL_STEP : 1, dueAt: at }
 }
 
 export interface CalibrationSample {
@@ -66,8 +70,6 @@ export interface LearningProfile {
 export const CALIBRATION_SIZE = 10
 export const PROMOTE_AT = 8
 export const DEMOTE_AT = 5
-export const CHALLENGE_SAMPLES = 6
-export const CHALLENGE_CORRECT = 4
 
 /** Select the same or closest lower available level, falling back to the lowest level. */
 export function availableLevel(
@@ -102,63 +104,87 @@ export function calibrate(
     : { level: next, epoch: profile.epoch + 1, samples: [] }
 }
 
+const PRACTICE_POOLS = ['new', 'review-once', 'mistake'] as const
+type PracticePool = (typeof PRACTICE_POOLS)[number]
+const SMALL_ROUND_ROTATION = [
+  'new',
+  'review-once',
+  'mistake',
+  'new',
+  'review-once',
+  'mistake',
+  'new',
+  'review-once',
+  'mistake',
+  'new',
+] as const
+const WEIGHTS = [4, 3, 3] as const
+
+function roundQuotas(count: number, completedRounds: number) {
+  const quotas = { new: 0, 'review-once': 0, mistake: 0 }
+  if (count < 3) {
+    for (let index = 0; index < count; index++) {
+      const slot = (completedRounds * count + index) % SMALL_ROUND_ROTATION.length
+      quotas[SMALL_ROUND_ROTATION[slot]!]++
+    }
+    return quotas
+  }
+
+  const order =
+    completedRounds % 2 === 0 ? PRACTICE_POOLS : (['new', 'mistake', 'review-once'] as const)
+  const shares = order.map((pool, index) => {
+    const scaled = count * WEIGHTS[index]!
+    quotas[pool] = Math.floor(scaled / 10)
+    return { pool, remainder: scaled % 10 }
+  })
+  const unassigned = count - quotas.new - quotas['review-once'] - quotas['mistake']
+  for (const { pool } of shares.sort((a, b) => b.remainder - a.remainder).slice(0, unassigned)) {
+    quotas[pool]++
+  }
+  return quotas
+}
+
 export function chooseProgressiveRound(
   candidates: readonly LearningCandidate[],
   count: number,
-  fillWithChallenges = false,
+  completedRounds: number,
 ): LearningCandidate[] {
-  const result: LearningCandidate[] = []
+  const quotas = roundQuotas(count, completedRounds)
+  const picked: LearningCandidate[] = []
   const seen = new Set<string>()
-  const queues: Record<LearningRole, LearningCandidate[]> = {
-    review: [],
-    current: [],
-    challenge: [],
-    early: [],
+  const queues: Record<PracticePool, LearningCandidate[]> = {
+    new: [],
+    'review-once': [],
+    mistake: [],
   }
-  for (const candidate of candidates) queues[candidate.role].push(candidate)
-
-  function take(role: LearningRole, limit: number) {
-    let added = 0
-    for (const candidate of queues[role]) {
-      if (result.length >= count || added >= limit) break
-      const key = candidate.conceptKey
-        ? `concept:${candidate.conceptKey}`
-        : `question:${candidate.id}`
-      if (seen.has(key)) continue
-      seen.add(key)
-      result.push(candidate)
-      added++
+  for (const candidate of candidates) {
+    if (candidate.pool !== 'recall') {
+      queues[candidate.pool].push(candidate)
     }
   }
 
-  const backlog = queues.review.length >= count
-  take('review', backlog ? Math.ceil(count / 2) : 1)
-  take('current', 1)
-  if (!fillWithChallenges && !backlog) take('challenge', 1)
-  take('review', count)
-  take('current', count)
-  if (fillWithChallenges) take('challenge', count)
-  if (result.length === 0) take('early', 1)
-  return result
-}
+  function take(pool: PracticePool, limit: number) {
+    const queue = queues[pool]
+    const target = Math.min(count, picked.length + limit)
+    while (picked.length < target) {
+      const candidate = queue.shift()
+      if (!candidate) break
+      const key =
+        candidate.subjectKey !== undefined
+          ? JSON.stringify(['subject', candidate.bankId, candidate.subjectKey])
+          : candidate.conceptKey !== undefined
+            ? JSON.stringify(['concept', candidate.conceptKey])
+            : JSON.stringify(['question', candidate.id])
+      if (seen.has(key)) continue
+      seen.add(key)
+      picked.push(candidate)
+    }
+  }
 
-export function chooseStudyRound(candidates: readonly LearningCandidate[], count: number) {
-  const ready = candidates.filter(({ role }) => role !== 'early')
-  if (!ready.length) return candidates.filter(({ role }) => role === 'early').slice(0, 1)
-
-  const fresh = chooseProgressiveRound(
-    ready.filter(({ materialSeenAt }) => materialSeenAt === undefined),
-    count,
-    true,
-  )
-  if (fresh.length === count) return fresh
-
-  const older = ready
-    .filter(({ materialSeenAt }) => materialSeenAt !== undefined)
-    .sort(
-      (a, b) =>
-        Number(b.role === 'review') - Number(a.role === 'review') ||
-        (a.materialSeenAt ?? 0) - (b.materialSeenAt ?? 0),
-    )
-  return [...fresh, ...older.slice(0, count - fresh.length)]
+  take('review-once', quotas['review-once'])
+  take('mistake', quotas['mistake'])
+  take('new', count)
+  take('review-once', count)
+  take('mistake', count)
+  return picked
 }

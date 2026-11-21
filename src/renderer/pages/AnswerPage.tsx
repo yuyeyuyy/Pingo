@@ -3,7 +3,7 @@ import { useState } from 'react'
 import type { FormEvent } from 'react'
 import type { PingoApi } from '../../shared/ipc'
 import { LANGUAGE_QUESTION_TYPES } from '../../shared/question-bank'
-import { pronunciationForView, SNOOZE_MINUTES } from '../../shared/reminders'
+import { LEARNING_POOLS, pronunciationForView, SNOOZE_MINUTES } from '../../shared/reminders'
 import type { AnswerView } from '../../shared/reminders'
 import { PronunciationButton, usePronunciation } from '../components/reminders/Pronunciation'
 import { desktopError, useDesktopValue } from '../components/reminders/useDesktopValue'
@@ -170,6 +170,9 @@ function QuestionStep({ api, view }: { api: PingoApi; view: QuestionView }) {
           <p className="bank-hint">
             {question.bankName}
             {question.languageType && ` · ${LANGUAGE_QUESTION_TYPES[question.languageType].label}`}
+            {question.pool && (
+              <span className="learning-pool">{LEARNING_POOLS[question.pool]}</span>
+            )}
           </p>
         </div>
         <div className="learning-header-actions">

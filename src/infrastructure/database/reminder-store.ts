@@ -43,6 +43,14 @@ export function createReminderStore(database: DatabaseSync): ReminderStore {
   const recordSuccess = database.prepare(
     'UPDATE wrong_questions SET consecutive_correct = consecutive_correct + 1 WHERE question_id = ?',
   )
+  const recordCorrectAnswer = database.prepare(`
+    INSERT OR IGNORE INTO correctly_answered_questions (question_id)
+    SELECT id FROM questions WHERE id = ?
+  `)
+  const correctlyAnswered = database.prepare(`
+    SELECT answered.question_id FROM json_each(?) selected
+    JOIN correctly_answered_questions answered ON answered.question_id = selected.value
+  `)
 
   return {
     load() {
@@ -61,16 +69,21 @@ export function createReminderStore(database: DatabaseSync): ReminderStore {
           history.run(ended.session.id, ended.at, ended.outcome, JSON.stringify(ended.session))
         }
         if (review?.outcome === 'incorrect') recordWrong.run(review.questionId)
-        if (
-          review?.outcome === 'correct' &&
-          graduate.run(review.questionId, REVIEW_SUCCESSES - 1).changes === 0
-        ) {
-          recordSuccess.run(review.questionId)
+        if (review?.outcome === 'correct') {
+          recordCorrectAnswer.run(review.questionId)
+          if (graduate.run(review.questionId, REVIEW_SUCCESSES - 1).changes === 0) {
+            recordSuccess.run(review.questionId)
+          }
         }
         if (review) learning.recordAttempt(review)
         if (ended?.outcome === 'completed') learning.recordCompleted(ended.session)
         save.run(payload)
       })
+    },
+    correctlyAnsweredQuestionIds(questionIds) {
+      return new Set(
+        correctlyAnswered.all(JSON.stringify(questionIds)).map((row) => String(row.question_id)),
+      )
     },
     isFavorite: (questionId) => favoriteExists.get(questionId) !== undefined,
     setFavorite(questionId, favorite) {

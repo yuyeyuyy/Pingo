@@ -8,7 +8,7 @@ import type { StudyMaterial, StudySubject } from './study-material'
 import { DEFAULT_BANK_LANGUAGE } from './language'
 import type { BankLanguage } from './language'
 import { locateSpokenWord, normalizedSpokenWord, supportsPronunciation } from './pronunciation'
-import type { WordRange } from './pronunciation'
+import type { PronunciationPreferences, WordRange } from './pronunciation'
 
 export type SessionQuestion = Question & {
   readonly bankName: string
@@ -87,7 +87,7 @@ export type VisibleQuestion = {
   | { kind: 'ordering'; items: readonly string[] }
 )
 
-export type AnswerView =
+export type PronunciationView = (
   | ({
       kind: 'material'
       total: number
@@ -102,6 +102,10 @@ export type AnswerView =
       feedback?: AnswerFeedback
       favorite: boolean
     }
+) & { pronunciationPreferences?: PronunciationPreferences }
+
+export type AnswerView =
+  | PronunciationView
   | {
       kind: 'summary'
       sessionId: string
@@ -118,8 +122,6 @@ export interface SessionTarget {
 }
 
 export type PronunciationTarget = (SessionTarget & { optionIndex?: number }) | StudyMaterialTarget
-
-export type PronunciationView = Extract<AnswerView, { kind: 'question' | 'material' }>
 
 export function spokenWord(
   question: VisibleQuestion,
@@ -217,7 +219,10 @@ function visibleQuestion(question: SessionQuestion): VisibleQuestion {
   }
 }
 
-export function questionView(session: LearningSession, favorite = false): AnswerView {
+export function questionView(
+  session: LearningSession,
+  favorite = false,
+): Extract<PronunciationView, { kind: 'question' }> | null {
   const question = session.questions[session.index]
   if (!question) return null
   return {

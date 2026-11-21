@@ -1,8 +1,10 @@
 import { Volume2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { PingoApi } from '../../../shared/ipc'
-import { pronunciationForView } from '../../../shared/reminders'
+import { DEFAULT_PRONUNCIATION_PREFERENCES, pronunciationForView } from '../../../shared/reminders'
 import type { PronunciationView } from '../../../shared/reminders'
+import { selectLocalVoice, waitForRecording } from './pronunciation-playback'
+import { speakWithVoice } from './system-voice'
 import { desktopError } from './useDesktopValue'
 
 export function usePronunciation(api: PingoApi, view: PronunciationView) {
@@ -37,45 +39,41 @@ export function usePronunciation(api: PingoApi, view: PronunciationView) {
     setPending(optionIndex ?? 'prompt')
     setMessage('')
 
+    const preferences = view.pronunciationPreferences ?? DEFAULT_PRONUNCIATION_PREFERENCES
+    const voice = selectLocalVoice(
+      window.speechSynthesis?.getVoices() ?? [],
+      language,
+      preferences.voiceURI,
+    )
+
     function fallback(reason: string) {
       if (request !== current.request) return
       current.stop?.()
       current.stop = undefined
-      const synthesis = window.speechSynthesis
-      const voices = synthesis
-        ?.getVoices()
-        .filter(
-          (voice) => voice.localService && voice.lang.toLowerCase().split(/[-_]/)[0] === language,
-        )
-      const voice = voices?.find((voice) => voice.default) ?? voices?.[0]
       if (!voice) {
         setMessage(reason)
         return
       }
-      const utterance = new SpeechSynthesisUtterance(word)
-      utterance.lang = voice.lang
-      utterance.voice = voice
-      current.stop = () => {
-        utterance.onend = null
-        utterance.onerror = null
-        synthesis.cancel()
-      }
-      utterance.onend = () => {
-        current.stop = undefined
-      }
-      utterance.onerror = () => {
-        current.stop = undefined
-        if (request === current.request) setMessage(reason)
-      }
-      synthesis.speak(utterance)
-      setMessage('使用系统发音。')
+      current.stop = speakWithVoice(voice, word, preferences.rate, {
+        end() {
+          current.stop = undefined
+        },
+        error() {
+          current.stop = undefined
+          if (request === current.request) setMessage(reason)
+        },
+      })
     }
 
     try {
-      const clip = await api.getPronunciation(target)
+      if (preferences.source === 'system' && voice) {
+        fallback('本机语音暂时无法播放。')
+        return
+      }
+      const clip = await waitForRecording(api.getPronunciation(target), !!voice)
       if (request !== current.request) return
       if (!clip) {
-        fallback('词典暂无这个单词的录音。')
+        fallback(clip === undefined ? '词典录音未及时返回。' : '词典暂无这个单词的录音。')
         return
       }
       const url = URL.createObjectURL(new Blob([clip.bytes], { type: clip.mimeType }))
@@ -93,7 +91,10 @@ export function usePronunciation(api: PingoApi, view: PronunciationView) {
       await audio.play().catch(() => {
         throw new Error('这段录音暂时无法播放。')
       })
-      if (request === current.request) audio.onerror = () => fallback('这段录音暂时无法播放。')
+      if (request === current.request) {
+        setMessage('词典录音')
+        audio.onerror = () => fallback('这段录音暂时无法播放。')
+      }
     } catch (error) {
       fallback(desktopError(error))
     } finally {

@@ -13,6 +13,7 @@ import type {
 import type {
   AnswerView,
   PauseOption,
+  PronunciationPreferences,
   RateAnswerRequest,
   ReminderStatus,
   ReminderSettings,
@@ -59,6 +60,7 @@ export interface PingoApi {
   copyQuestionImportPrompt(template: BankTemplate): Promise<void>
   getReminderStatus(): Promise<ReminderStatus>
   saveReminderSettings(settings: ReminderSettings): Promise<ReminderStatus>
+  savePronunciationPreferences(preferences: PronunciationPreferences): Promise<ReminderStatus>
   pauseReminders(option: PauseOption): Promise<ReminderStatus>
   resumeReminders(): Promise<ReminderStatus>
   startLearning(): Promise<ReminderStatus>
@@ -95,6 +97,7 @@ export const IPC_CHANNELS = {
   copyQuestionImportPrompt: 'bank:copy-import-prompt',
   getReminderStatus: 'reminder:get-status',
   saveReminderSettings: 'reminder:save-settings',
+  savePronunciationPreferences: 'settings:save-pronunciation',
   pauseReminders: 'reminder:pause',
   resumeReminders: 'reminder:resume',
   startLearning: 'learning:start',

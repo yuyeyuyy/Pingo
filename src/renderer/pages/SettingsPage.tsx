@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { AppInfo } from '../../shared/ipc'
 import { ReminderSettings } from '../components/reminders/ReminderSettings'
+import { PronunciationSettings } from '../components/reminders/PronunciationSettings'
 
 const platforms: Record<string, string> = { darwin: 'macOS', win32: 'Windows', linux: 'Linux' }
 
@@ -52,6 +53,7 @@ export function SettingsPage() {
         <p>应用信息与桌面行为。</p>
       </header>
 
+      <PronunciationSettings />
       <ReminderSettings />
 
       <section className="settings-section" aria-labelledby="desktop-heading">

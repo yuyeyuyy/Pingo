@@ -24,6 +24,24 @@ afterEach(() => {
   rmSync(directory, { recursive: true, force: true })
 })
 
+it('persists pronunciation preferences independently of reminder settings and exposes them to study views', () => {
+  const fixture = schedulerFixture({ store: createReminderStore(db), schedule: () => () => {} })
+  const service = fixture.create()
+  service.start()
+  service.startLearning()
+  const original = service.answerView()
+  const preferences = { voiceURI: 'local-voice', rate: 0.85, source: 'system' } as const
+  service.updatePronunciation(preferences)
+  expect(service.answerView()).toEqual({ ...original, pronunciationPreferences: preferences })
+  service.updateSettings({ ...service.status().settings, intervalMinutes: 45 })
+  service.stop()
+  db.close()
+  db = openDatabase(directory)
+  const reopened = schedulerFixture({ store: createReminderStore(db) }).create()
+  expect(reopened.status().pronunciation).toEqual(preferences)
+  expect(reopened.status().settings.intervalMinutes).toBe(45)
+})
+
 it('keeps v3 bank and question IDs, saved sessions, and history when adding bank templates', () => {
   const oldFolder = mkdtempSync(join(directory, 'legacy-'))
   const legacy = new DatabaseSync(join(oldFolder, 'pingo.sqlite'))

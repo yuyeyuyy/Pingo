@@ -11,6 +11,20 @@ export interface PronunciationClip {
   mimeType: string
 }
 
+export interface PronunciationPreferences {
+  voiceURI: string | null
+  rate: number
+  source: 'dictionary' | 'system'
+}
+
+export const PRONUNCIATION_RATE = { min: 0.75, max: 1.25 } as const
+
+export const DEFAULT_PRONUNCIATION_PREFERENCES: Readonly<PronunciationPreferences> = {
+  voiceURI: null,
+  rate: 1,
+  source: 'dictionary',
+}
+
 export function supportsPronunciation(language: BankLanguage) {
   return BANK_LANGUAGES[language].pronunciation
 }

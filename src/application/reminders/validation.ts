@@ -2,6 +2,8 @@ import { PAUSE_OPTIONS, SNOOZE_MINUTES } from '../../domain/scheduling'
 import type { PauseOption, ReminderSettings } from '../../domain/scheduling'
 import { PRACTICE_SOURCES } from '../../domain/review'
 import type { PracticeSource } from '../../domain/review'
+import { PRONUNCIATION_RATE } from '../../domain/pronunciation'
+import type { PronunciationPreferences } from '../../domain/pronunciation'
 import type { PronunciationTarget, SessionTarget, StudyMaterialTarget } from '../../domain/session'
 import type {
   RateAnswerRequest,
@@ -107,6 +109,27 @@ export function pronunciationTarget(input: unknown): PronunciationTarget {
     ...target,
     optionIndex: integer(data.optionIndex, 0, BANK_LIMITS.maxOptions - 1, '选项序号无效。'),
   }
+}
+
+export function pronunciationPreferences(input: unknown): PronunciationPreferences {
+  const { voiceURI, rate, source } = record(input)
+  if (
+    voiceURI !== null &&
+    (typeof voiceURI !== 'string' ||
+      !voiceURI.trim() ||
+      voiceURI.length > 512 ||
+      voiceURI.includes('\0'))
+  )
+    invalid('本机语音标识无效。')
+  if (
+    typeof rate !== 'number' ||
+    !Number.isFinite(rate) ||
+    rate < PRONUNCIATION_RATE.min ||
+    rate > PRONUNCIATION_RATE.max
+  )
+    invalid('请输入有效的发音语速。')
+  if (source !== 'dictionary' && source !== 'system') invalid('请选择有效的发音来源。')
+  return { voiceURI, rate, source }
 }
 
 export function studyMaterialTarget(input: unknown): StudyMaterialTarget {

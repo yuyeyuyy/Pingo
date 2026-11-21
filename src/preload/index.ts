@@ -48,6 +48,8 @@ const api: PingoApi = {
   copyQuestionImportPrompt: (template) => invoke('copyQuestionImportPrompt', template),
   getReminderStatus: () => invoke('getReminderStatus'),
   saveReminderSettings: (settings) => invoke('saveReminderSettings', settings),
+  savePronunciationPreferences: (preferences) =>
+    invoke('savePronunciationPreferences', preferences),
   pauseReminders: (option) => invoke('pauseReminders', option),
   resumeReminders: () => invoke('resumeReminders'),
   startLearning: () => invoke('startLearning'),

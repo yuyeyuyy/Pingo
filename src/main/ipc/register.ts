@@ -10,6 +10,7 @@ import { RequestError } from '../../application/request-error'
 import { pronunciationForView } from '../../domain/session'
 import {
   pauseOption,
+  pronunciationPreferences,
   pronunciationTarget,
   rateAnswerRequest,
   reminderSettings,
@@ -107,6 +108,10 @@ export function registerIpc(
     saveReminderSettings: {
       arity: 1,
       run: (input) => reminders.updateSettings(reminderSettings(input)),
+    },
+    savePronunciationPreferences: {
+      arity: 1,
+      run: (input) => reminders.updatePronunciation(pronunciationPreferences(input)),
     },
     pauseReminders: { arity: 1, run: (input) => reminders.pause(pauseOption(input)) },
     resumeReminders: { arity: 0, run: () => reminders.resume() },

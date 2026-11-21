@@ -1,6 +1,7 @@
 import type { ReminderSettings, SchedulerPhase } from '../domain/scheduling'
 import type { AnswerInput, AnswerView, SessionTarget } from '../domain/session'
 import type { LearningNotice, LearningStatus } from '../domain/progressive-learning'
+import type { PronunciationPreferences } from '../domain/pronunciation'
 
 export {
   INTERVAL_PRESETS,
@@ -11,6 +12,8 @@ export {
 export type { ReminderSettings, PauseOption, SessionMode } from '../domain/scheduling'
 export { pronunciationForView, spokenWord } from '../domain/session'
 export type { PronunciationView } from '../domain/session'
+export { DEFAULT_PRONUNCIATION_PREFERENCES, PRONUNCIATION_RATE } from '../domain/pronunciation'
+export type { PronunciationPreferences } from '../domain/pronunciation'
 export type { AnswerView, AnswerInput, SessionTarget, StudyMaterialTarget } from '../domain/session'
 export { DEFAULT_PRACTICE_SETTINGS } from '../domain/review'
 export type { PracticeSettings } from '../domain/review'
@@ -25,6 +28,7 @@ export interface ReminderStatus {
   notice: LearningNotice | null
   reviewRevision: number
   learning?: LearningStatus
+  pronunciation?: PronunciationPreferences
 }
 
 export interface SubmitAnswerRequest extends SessionTarget {

@@ -16,6 +16,7 @@ import {
   sessionSummary,
 } from '../../domain/session'
 import type { StudySubject } from '../../domain/study-material'
+import type { PronunciationPreferences } from '../../domain/pronunciation'
 import type {
   AnswerView,
   LearningSession,
@@ -40,6 +41,7 @@ export interface ReminderState {
   nextAt: number | null
   session: LearningSession | null
   completedInCycle?: number
+  pronunciation?: PronunciationPreferences
 }
 
 export interface EndedSession {
@@ -148,6 +150,7 @@ export class SchedulerService {
       pendingSessionId: session?.stage === 'pending' ? session.id : null,
       notice: this.notice,
       reviewRevision: this.reviewRevision,
+      ...(this.state.pronunciation ? { pronunciation: this.state.pronunciation } : {}),
       ...(learning ? { learning } : {}),
     }
   }
@@ -155,10 +158,18 @@ export class SchedulerService {
   answerView(): AnswerView {
     const session = this.state.session
     if (session?.stage !== 'active') return this.summary
-    const material = nextStudyMaterial(session)
-    if (material) return material
     const question = session.questions[session.index]
-    return questionView(session, !!question && this.dependencies.store.isFavorite(question.id))
+    const view =
+      nextStudyMaterial(session) ??
+      questionView(session, !!question && this.dependencies.store.isFavorite(question.id))
+    return view && this.state.pronunciation
+      ? { ...view, pronunciationPreferences: this.state.pronunciation }
+      : view
+  }
+
+  updatePronunciation(pronunciation: PronunciationPreferences): ReminderStatus {
+    this.commit({ ...this.state, pronunciation })
+    return this.status()
   }
 
   updateSettings(settings: ReminderSettings): ReminderStatus {

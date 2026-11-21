@@ -1,6 +1,10 @@
 import { expect, it, vi } from 'vitest'
 import { createPronunciationService } from '../src/application/pronunciation'
 import { createFreeDictionaryAdapter } from '../src/infrastructure/pronunciation/free-dictionary'
+import {
+  selectLocalVoice,
+  waitForRecording,
+} from '../src/renderer/components/reminders/pronunciation-playback'
 
 it('reads permitted Free Dictionary phonetics URLs and returns bounded audio bytes', async () => {
   const fetcher = vi
@@ -62,4 +66,66 @@ it('deduplicates concurrent word requests, caches clips and retries a network fa
   await expect(lookup('en', 'HELLO')).resolves.toEqual(clip)
   expect(provider).toHaveBeenCalledTimes(2)
   expect(() => lookup('ja', 'hello')).toThrow('没有可用')
+})
+
+it('uses a normal installed English voice even when the system default is a voice effect', () => {
+  const albert = {
+    voiceURI: 'mac-albert',
+    name: 'Albert',
+    lang: 'en-US',
+    localService: true,
+    default: true,
+  }
+  const daniel = {
+    voiceURI: 'mac-daniel',
+    name: 'Daniel',
+    lang: 'en-GB',
+    localService: true,
+    default: false,
+  }
+  const remote = {
+    voiceURI: 'cloud-voice',
+    name: 'Samantha (Enhanced)',
+    lang: 'en-US',
+    localService: false,
+    default: false,
+  }
+  expect(selectLocalVoice([albert, remote, daniel], 'en')).toBe(daniel)
+  expect(selectLocalVoice([albert, remote], 'en')).toBeUndefined()
+  expect(selectLocalVoice([albert, remote, daniel], 'en', remote.voiceURI)).toBe(daniel)
+})
+
+it('honors a selected local voice by ID and adapts to a different device’s voice list', () => {
+  const david = {
+    voiceURI: 'win-david',
+    name: 'Microsoft David',
+    lang: 'en-US',
+    localService: true,
+    default: true,
+  }
+  const zira = {
+    voiceURI: 'win-zira',
+    name: 'Microsoft Zira',
+    lang: 'en-US',
+    localService: true,
+    default: false,
+  }
+  expect(selectLocalVoice([david, zira], 'en', zira.voiceURI)).toBe(zira)
+  expect(selectLocalVoice([david, zira], 'en', 'mac-samantha')).toBe(david)
+})
+
+it('bounds the foreground wait only when a local voice is available and keeps the lookup alive', async () => {
+  vi.useFakeTimers()
+  try {
+    const lookup = new Promise<string>((resolve) => setTimeout(() => resolve('recording'), 1500))
+    const withVoice = waitForRecording(lookup, true)
+    const withoutVoice = waitForRecording(lookup, false)
+    await vi.advanceTimersByTimeAsync(650)
+    await expect(withVoice).resolves.toBeUndefined()
+    await vi.advanceTimersByTimeAsync(850)
+    await expect(withoutVoice).resolves.toBe('recording')
+    await expect(waitForRecording(lookup, true)).resolves.toBe('recording')
+  } finally {
+    vi.useRealTimers()
+  }
 })

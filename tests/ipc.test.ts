@@ -144,6 +144,30 @@ describe('app IPC', () => {
     expect(scheduler.status().settings.intervalMinutes).toBe(30)
   })
 
+  it('validates pronunciation preferences and saves valid values from the main window', () => {
+    const scheduler = schedulerFixture().create()
+    register(
+      { getVersion: () => '0.1.0', platform: 'darwin' },
+      (_event, scope) => scope === 'main',
+      scheduler,
+    )
+    const preferences = { voiceURI: 'local://voice', rate: 0.9, source: 'system' } as const
+    for (const malformed of [
+      { ...preferences, rate: 0.5 },
+      { ...preferences, source: 'remote' },
+      { ...preferences, voiceURI: ' ' },
+    ]) {
+      expect(invoke(IPC_CHANNELS.savePronunciationPreferences, malformed)).toMatchObject({
+        error: { code: 'INVALID_ARGUMENTS' },
+      })
+    }
+    expect(scheduler.status().pronunciation).toBeUndefined()
+    expect(invoke(IPC_CHANNELS.savePronunciationPreferences, preferences)).toMatchObject({
+      ok: true,
+      data: { pronunciation: preferences },
+    })
+  })
+
   it('only resolves pronunciation for the current visible word and awaits the adapter', async () => {
     const scheduler = schedulerFixture({
       questions: () => [

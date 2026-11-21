@@ -8,11 +8,14 @@ import {
   INTERVAL_PRESETS,
   PAUSE_OPTIONS,
   QUESTION_PRESETS,
+  strategyForBank,
 } from '../../../shared/reminders'
 import type {
+  LearningStrategy,
   PauseOption,
   ReminderSettings as Settings,
   ReminderStatus,
+  SessionMode,
 } from '../../../shared/reminders'
 import { desktopError, useDesktopValue } from './useDesktopValue'
 
@@ -48,10 +51,15 @@ function preset(value: number, choices: readonly number[]) {
   return choices.includes(value) ? String(value) : 'custom'
 }
 
-function ReminderForm({ settings, api }: { settings: Settings; api: PingoApi }) {
+function ReminderForm({ status, api }: { status: ReminderStatus; api: PingoApi }) {
+  const { settings, learningStrategies } = status
   const [draft, setDraft] = useState(settings)
   const originalPractice = settings.practice ?? DEFAULT_PRACTICE_SETTINGS
   const [bankId, setBankId] = useState(originalPractice.bankId ?? '')
+  const [strategyDraft, setStrategyDraft] = useState<LearningStrategy>()
+  const strategy = strategyDraft ?? strategyForBank(learningStrategies, bankId || null)
+  const materialsOnly = draft.sessionMode === 'learn'
+  const countLabel = materialsOnly ? '每次资料数' : '每次题量'
   const [source, setSource] = useState(originalPractice.source)
   const [frequency, setFrequency] = useState(String(originalPractice.wrongEvery))
   const [banks, setBanks] = useState<readonly QuestionBank[]>()
@@ -104,6 +112,7 @@ function ReminderForm({ settings, api }: { settings: Settings; api: PingoApi }) 
       }
       await api.saveReminderSettings({
         ...draft,
+        strategy,
         practice: { bankId: bankId || null, source, wrongEvery: Number(frequency) },
         intervalMinutes: rounded,
         questionsPerSession: Number(count === 'custom' ? countValue : count),
@@ -136,8 +145,12 @@ function ReminderForm({ settings, api }: { settings: Settings; api: PingoApi }) 
             <select
               value={bankId}
               aria-label="学习题库"
-              disabled={!banks}
-              onChange={(event) => setBankId(event.target.value)}
+              disabled={busy || !banks}
+              onChange={(event) => {
+                setBankId(event.target.value)
+                setStrategyDraft(undefined)
+                setSaved(false)
+              }}
             >
               <option value="">全部题库</option>
               {bankId && !banks?.some((bank) => bank.id === bankId) && (
@@ -151,10 +164,10 @@ function ReminderForm({ settings, api }: { settings: Settings; api: PingoApi }) 
             </select>
           </label>
           <label className="bank-field">
-            抽题范围
+            {materialsOnly ? '资料范围' : '抽题范围'}
             <select
               value={source}
-              aria-label="抽题范围"
+              aria-label={materialsOnly ? '资料范围' : '抽题范围'}
               onChange={(event) => {
                 const selected = practiceSources.find((item) => item === event.target.value)
                 if (selected) setSource(selected)
@@ -172,44 +185,54 @@ function ReminderForm({ settings, api }: { settings: Settings; api: PingoApi }) 
             <select
               aria-label="学习模式"
               value={draft.sessionMode ?? 'practice'}
-              onChange={(event) =>
-                change('sessionMode', event.target.value === 'study' ? 'study' : 'practice')
-              }
+              onChange={(event) => change('sessionMode', event.target.value as SessionMode)}
             >
               <option value="practice">练习模式</option>
-              <option value="study">学习模式</option>
+              <option value="study">学习验证模式</option>
+              <option value="learn">纯学习模式</option>
             </select>
             <span className="bank-hint">
-              {draft.sessionMode !== 'study'
-                ? '直接开始答题。'
-                : draft.strategy === 'progressive'
-                  ? '新题和错题先看资料，复习一次的题直接作答。'
-                  : '优先学习新内容。答对过的题再次抽到时直接练习。'}
+              {materialsOnly
+                ? '每轮只阅读学习资料。'
+                : draft.sessionMode !== 'study'
+                  ? '直接开始答题。'
+                  : strategy === 'progressive'
+                    ? '新题和错题先看资料，复习一次的题直接作答。'
+                    : '优先学习新内容。答对过的题再次抽到时直接练习。'}
             </span>
           </label>
           <label className="bank-field">
             学习策略
             <select
               aria-label="学习策略"
-              value={draft.strategy ?? 'random'}
-              onChange={(event) =>
-                change('strategy', event.target.value === 'progressive' ? 'progressive' : 'random')
-              }
+              value={strategy}
+              disabled={busy}
+              onChange={(event) => {
+                setStrategyDraft(event.target.value === 'progressive' ? 'progressive' : 'random')
+                setSaved(false)
+              }}
             >
               <option value="progressive">循序渐进</option>
-              <option value="random">随机抽题</option>
+              <option value="random">{materialsOnly ? '随机抽取' : '随机抽题'}</option>
             </select>
+            <span className="bank-hint">
+              {bankId ? '此策略单独保存到当前题库。' : '此策略用于从多个题库混合抽取。'}
+            </span>
           </label>
         </div>
-        {draft.strategy === 'progressive' && (
-          <p className="bank-hint">每轮约 40% 新题、30% 复习一次、30% 错题。</p>
+        {strategy === 'progressive' && (
+          <p className="bank-hint">
+            {materialsOnly
+              ? '优先学习未看过的资料，再复习较久未看的资料。'
+              : '每轮约 40% 新题、30% 复习一次、30% 错题。'}
+          </p>
         )}
         {banksError && (
           <p className="bank-error" role="alert">
             {banksError}
           </p>
         )}
-        {source === 'all' && (
+        {source === 'all' && !materialsOnly && (
           <label className="bank-field">
             每隔几轮抽取错题
             <input
@@ -226,9 +249,17 @@ function ReminderForm({ settings, api }: { settings: Settings; api: PingoApi }) 
           </label>
         )}
         {source === 'mistakes' && (
-          <p className="bank-hint">错题本为空时，从所选题库的完整题目抽取。</p>
+          <p className="bank-hint">
+            {materialsOnly
+              ? '错题本没有关联资料时，从选定题库抽取资料。'
+              : '错题本为空时，从所选题库的完整题目抽取。'}
+          </p>
         )}
-        {source === 'favorites' && <p className="bank-hint">收藏本为空时暂停本轮抽题。</p>}
+        {source === 'favorites' && (
+          <p className="bank-hint">
+            {materialsOnly ? '收藏本没有关联资料时暂停本轮学习。' : '收藏本为空时暂停本轮抽题。'}
+          </p>
+        )}
         <div className="reminder-fields">
           <label className="bank-field">
             提醒间隔
@@ -242,18 +273,18 @@ function ReminderForm({ settings, api }: { settings: Settings; api: PingoApi }) 
             </select>
           </label>
           <label className="bank-field">
-            每次题量
+            {countLabel}
             <select
-              aria-label="每次题量"
+              aria-label={countLabel}
               value={count}
               onChange={(event) => setCount(event.target.value)}
             >
               {QUESTION_PRESETS.map((value) => (
                 <option key={value} value={value}>
-                  {value} 道
+                  {value} {materialsOnly ? '份' : '道'}
                 </option>
               ))}
-              <option value="custom">自定义题量</option>
+              <option value="custom">{materialsOnly ? '自定义资料数' : '自定义题量'}</option>
             </select>
           </label>
         </div>
@@ -283,7 +314,7 @@ function ReminderForm({ settings, api }: { settings: Settings; api: PingoApi }) 
         )}
         {count === 'custom' && (
           <label className="bank-field">
-            自定义每次题量
+            自定义{countLabel}
             <input
               type="number"
               min={1}
@@ -302,7 +333,7 @@ function ReminderForm({ settings, api }: { settings: Settings; api: PingoApi }) 
               change('mode', event.target.value === 'popup' ? 'popup' : 'notification')
             }
           >
-            <option value="notification">轻提醒（点击系统通知后答题）</option>
+            <option value="notification">轻提醒（点击系统通知后开始学习）</option>
             <option value="popup">主动弹窗</option>
           </select>
         </label>
@@ -436,6 +467,9 @@ function ReminderControls({ api, status }: { api: PingoApi; status: ReminderStat
             所选范围暂无关联学习资料的题目。可导入带资料的题库，或切换到练习模式。
           </p>
         )}
+        {status.notice === 'empty-materials' && (
+          <p className="bank-hint">所选范围暂无学习资料。可导入资料或切换范围。</p>
+        )}
         {status.learning && (
           <p className="bank-hint">
             {status.learning.level
@@ -530,7 +564,7 @@ export function ReminderSettings() {
       {api && value ? (
         <>
           <ReminderControls api={api} status={value} />
-          <ReminderForm api={api} settings={value.settings} />
+          <ReminderForm api={api} status={value} />
         </>
       ) : (
         <p className="bank-hint" role="status">

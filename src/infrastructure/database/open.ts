@@ -221,6 +221,15 @@ const migrations = [
     SELECT 1 FROM json_each(payload, '$.session.questions') question
     WHERE json_extract(question.value, '$.learning.pool') = 'review-twice'
   )`,
+  `CREATE TABLE bank_learning_strategies (
+    bank_id TEXT PRIMARY KEY NOT NULL REFERENCES question_banks(id) ON DELETE CASCADE,
+    strategy TEXT NOT NULL CHECK (strategy IN ('random', 'progressive'))
+  ) STRICT;
+
+  INSERT INTO bank_learning_strategies (bank_id, strategy)
+  SELECT b.id, CASE WHEN json_extract(s.payload, '$.settings.strategy') = 'progressive'
+    THEN 'progressive' ELSE 'random' END
+  FROM question_banks b CROSS JOIN reminder_state s`,
 ]
 
 function migrate(database: DatabaseSync): void {

@@ -6,6 +6,7 @@ import type {
   SchedulerDependencies,
 } from '../../src/application/reminders/scheduler'
 import type { SessionQuestion } from '../../src/domain/session'
+import type { LearningStrategy } from '../../src/domain/progressive-learning'
 
 export const questions: SessionQuestion[] = [
   {
@@ -31,6 +32,7 @@ export function schedulerFixture(overrides: Partial<SchedulerDependencies> = {})
   const history: EndedSession[] = []
   const favorites = new Set<string>()
   const correctlyAnswered = new Set<string>()
+  const bankStrategies = new Map<string, LearningStrategy>()
   let ids = 0
   const system: ReturnType<SchedulerDependencies['system']> = {
     idle: false,
@@ -44,11 +46,13 @@ export function schedulerFixture(overrides: Partial<SchedulerDependencies> = {})
   const dependencies: SchedulerDependencies = {
     store: {
       load: () => state && structuredClone(state),
-      save(next, { ended, review } = {}) {
+      save(next, { ended, review, bankStrategy } = {}) {
         state = structuredClone(next)
+        if (bankStrategy) bankStrategies.set(bankStrategy.bankId, bankStrategy.strategy)
         if (ended) history.push(structuredClone(ended))
         if (review?.outcome === 'correct') correctlyAnswered.add(review.questionId)
       },
+      bankStrategies: () => Object.fromEntries(bankStrategies),
       correctlyAnsweredQuestionIds: (ids) => new Set(ids.filter((id) => correctlyAnswered.has(id))),
       isFavorite: (id) => favorites.has(id),
       setFavorite(id, favorite) {

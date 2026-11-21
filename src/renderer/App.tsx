@@ -65,7 +65,9 @@ export function App() {
                   ? '暂无可安排的题目'
                   : reminders.notice === 'empty-study'
                     ? '暂无带学习资料的题目'
-                    : '所选题库暂无题目'}
+                    : reminders.notice === 'empty-materials'
+                      ? '所选范围暂无学习资料'
+                      : '所选题库暂无题目'}
           </button>
         )}
         <div className="sidebar-footer">

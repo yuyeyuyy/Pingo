@@ -8,7 +8,7 @@ export function createReminderNotifications() {
         if (!Notification.isSupported()) return
         notification = new Notification({
           title: 'Pingo · 学习提醒',
-          body: '有一组题目等你练习。',
+          body: '有一轮学习待开始。',
           silent: true,
         })
         notification.once('click', () => {

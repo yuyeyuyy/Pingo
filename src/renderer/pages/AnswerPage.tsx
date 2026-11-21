@@ -72,7 +72,7 @@ function MaterialStep({
   api: PingoApi
   view: Extract<AnswerView, { kind: 'material' }>
 }) {
-  const { sessionId, position, total, material } = view
+  const { sessionId, position, total, material, materialsOnly } = view
   const { busy, error, run } = useStepAction()
   const pronunciation = usePronunciation(api, view)
   const canSpeak = pronunciationForView(view) !== undefined
@@ -138,7 +138,7 @@ function MaterialStep({
             disabled={busy}
             onClick={() => run(() => api.advanceStudyMaterial({ sessionId, position }))}
           >
-            {position === total ? '开始练习' : '下一份资料'}
+            {position < total ? '下一份资料' : materialsOnly ? '完成学习' : '开始练习'}
           </button>
         </footer>
       </div>
@@ -301,27 +301,33 @@ export function AnswerPage() {
       {value?.kind === 'summary' ? (
         <>
           <h1>本轮学习已完成</h1>
-          <p>共 {value.total} 道题</p>
-          <dl className="learning-summary">
-            <div>
-              <dt>答对</dt>
-              <dd>{value.correct}</dd>
-            </div>
-            <div>
-              <dt>答错</dt>
-              <dd>{value.incorrect}</dd>
-            </div>
-            <div>
-              <dt>待自评</dt>
-              <dd>{value.ungraded}</dd>
-            </div>
-          </dl>
+          {value.materialsOnly ? (
+            <p>已学习 {value.total} 份资料</p>
+          ) : (
+            <>
+              <p>共 {value.total} 道题</p>
+              <dl className="learning-summary">
+                <div>
+                  <dt>答对</dt>
+                  <dd>{value.correct}</dd>
+                </div>
+                <div>
+                  <dt>答错</dt>
+                  <dd>{value.incorrect}</dd>
+                </div>
+                <div>
+                  <dt>待自评</dt>
+                  <dd>{value.ungraded}</dd>
+                </div>
+              </dl>
+            </>
+          )}
         </>
       ) : (
         <>
           <h1>学习练习</h1>
           <p role="status">
-            {error || (value === undefined && api ? '正在读取题目…' : '目前没有进行中的练习。')}
+            {error || (value === undefined && api ? '正在读取学习内容…' : '目前没有进行中的学习。')}
           </p>
         </>
       )}

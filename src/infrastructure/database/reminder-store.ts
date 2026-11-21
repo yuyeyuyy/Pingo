@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite'
 import type { LearningSelection } from '../../application/reminders/learning-engine'
 import type { ReminderState, ReminderStore } from '../../application/reminders/scheduler'
+import type { LearningStrategy } from '../../domain/progressive-learning'
 import { REVIEW_SUCCESSES } from '../../domain/review'
 import { isBankLanguage } from '../../domain/language'
 import type { PracticeSource } from '../../domain/review'
@@ -16,6 +17,12 @@ export function createReminderStore(database: DatabaseSync): ReminderStore {
   const save = database.prepare(`
     INSERT INTO reminder_state VALUES (1, ?)
     ON CONFLICT (singleton) DO UPDATE SET payload = excluded.payload
+  `)
+  const bankStrategies = database.prepare('SELECT bank_id, strategy FROM bank_learning_strategies')
+  const saveBankStrategy = database.prepare(`
+    INSERT INTO bank_learning_strategies (bank_id, strategy)
+    SELECT id, ? FROM question_banks WHERE id = ?
+    ON CONFLICT (bank_id) DO UPDATE SET strategy = excluded.strategy
   `)
   const history = database.prepare(`
     INSERT INTO learning_history (session_id, ended_at, outcome, payload) VALUES (?, ?, ?, ?)
@@ -57,13 +64,14 @@ export function createReminderStore(database: DatabaseSync): ReminderStore {
       const row = load.get()
       return row ? (JSON.parse(String(row.payload)) as ReminderState) : undefined
     },
-    save(state, { ended, review, studySeen } = {}) {
+    save(state, { ended, review, studySeen, bankStrategy } = {}) {
       const payload = JSON.stringify(state)
-      if (!ended && !studySeen && (!review || review.outcome === 'ungraded')) {
+      if (!ended && !studySeen && !bankStrategy && (!review || review.outcome === 'ungraded')) {
         save.run(payload)
         return
       }
       writeTransaction(database, () => {
+        if (bankStrategy) saveBankStrategy.run(bankStrategy.strategy, bankStrategy.bankId)
         if (studySeen) rememberStudyMaterial.run(studySeen.key, studySeen.at, studySeen.bankId)
         if (ended) {
           history.run(ended.session.id, ended.at, ended.outcome, JSON.stringify(ended.session))
@@ -79,6 +87,11 @@ export function createReminderStore(database: DatabaseSync): ReminderStore {
         if (ended?.outcome === 'completed') learning.recordCompleted(ended.session)
         save.run(payload)
       })
+    },
+    bankStrategies() {
+      return Object.fromEntries(
+        bankStrategies.all().map((row) => [String(row.bank_id), row.strategy as LearningStrategy]),
+      )
     },
     correctlyAnsweredQuestionIds(questionIds) {
       return new Set(

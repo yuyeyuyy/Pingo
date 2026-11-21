@@ -14,7 +14,10 @@ import {
   createLearningQuestionSource,
   createReminderStore,
 } from '../src/infrastructure/database/reminder-store'
-import { createStudyMaterialSource } from '../src/infrastructure/database/study-material-source'
+import {
+  createStudyMaterialSampler,
+  createStudyMaterialSource,
+} from '../src/infrastructure/database/study-material-source'
 import { schedulerFixture } from './helpers/reminders'
 
 let directory: string
@@ -49,6 +52,7 @@ function scheduler(now = Date.now) {
     questions: createLearningQuestionSource(database),
     learning: createLearningEngine(database),
     studyMaterials: createStudyMaterialSource(database),
+    sampleStudyMaterials: createStudyMaterialSampler(database),
     now,
     schedule: () => () => {},
     makeId: randomUUID,
@@ -68,6 +72,114 @@ function question(prompt: string, materialKey?: string) {
     ...(materialKey ? { materialKey, conceptKey: materialKey } : {}),
   } as const
 }
+
+it.each(['random', 'progressive'] as const)(
+  'completes a materials-only round without questions using the %s strategy',
+  (strategy) => {
+    const { id: bankId } = banks().createBank({ name: '纯学习词表', template: 'language' })
+    const { service, store, fixture } = scheduler()
+    service.updateSettings({
+      ...service.status().settings,
+      sessionMode: 'learn',
+      questionsPerSession: 2,
+      strategy,
+      practice: { bankId, source: 'all', wrongEvery: 1 },
+    })
+    expect(service.startLearning().notice).toBe('empty-materials')
+    expect(fixture.show).not.toHaveBeenCalled()
+
+    banks().appendQuestionImport({ bankId, json: JSON.stringify({ materials: [apple, pear] }) })
+    service.questionsAdded()
+    expect(service.status().notice).toBeNull()
+    service.startLearning()
+    const first = service.answerView()
+    if (first?.kind !== 'material') throw new Error('Expected the first study card')
+    expect(first).toMatchObject({ materialsOnly: true, total: 2, material: { language: 'en' } })
+    expect(store.load()?.session).toMatchObject({ strategy, questions: [], answers: [] })
+    expect(service.status().learning).toBeUndefined()
+    expect(service.advanceStudyMaterial({ sessionId: first.sessionId, position: 2 })).toEqual(first)
+    const second = service.advanceStudyMaterial({ sessionId: first.sessionId, position: 1 })
+    expect(second).toMatchObject({ kind: 'material', materialsOnly: true, position: 2 })
+    if (second?.kind !== 'material') throw new Error('Expected the second study card')
+    expect(new Set([first.material.key, second.material.key])).toEqual(new Set(['apple', 'pear']))
+
+    service.snooze(first.sessionId, 5)
+    service.stop()
+    database.close()
+    database = openDatabase(directory)
+    const reopened = scheduler()
+    reopened.service.startLearning()
+    expect(reopened.service.answerView()).toEqual(second)
+    expect(
+      reopened.service.advanceStudyMaterial({ sessionId: first.sessionId, position: 2 }),
+    ).toEqual({
+      kind: 'summary',
+      materialsOnly: true,
+      sessionId: first.sessionId,
+      total: 2,
+    })
+    expect(reopened.store.load()?.session).toBeNull()
+    expect(reopened.store.load()?.completedInCycle ?? 0).toBe(0)
+    expect(reopened.store.load()?.completedRounds ?? 0).toBe(0)
+    expect(database.prepare('SELECT count(*) AS count FROM question_learning').get()?.count).toBe(0)
+    expect(database.prepare('SELECT outcome FROM learning_history').all()).toEqual([
+      { outcome: 'completed' },
+    ])
+  },
+)
+
+it('prioritizes unseen materials then difficulty, deduplicates words, and respects the bank and review scope', () => {
+  const bankService = banks()
+  const { id: bankId } = bankService.createBank({ name: '词汇', template: 'language' })
+  const otherBank = bankService.createBank({ name: '其他题库' }).id
+  const difficult = { key: 'mitigate', title: 'mitigate', explanation: '缓和' }
+  bankService.appendQuestionImport({
+    bankId,
+    json: JSON.stringify({
+      materials: [difficult, apple, { ...apple, key: 'another-apple', title: 'APPLE' }, pear],
+      questions: [
+        { ...question('高难度词', difficult.key), difficulty: 5 },
+        question('梨', pear.key),
+      ],
+    }),
+  })
+  bankService.appendQuestionImport({
+    bankId: otherBank,
+    json: JSON.stringify({ materials: [apple] }),
+  })
+  const sample = createStudyMaterialSampler(database)
+  const scope = { bankId, source: 'all' } as const
+  expect(sample(10, scope, 'progressive').map(({ key }) => key)).toEqual([
+    'apple',
+    'pear',
+    'mitigate',
+  ])
+  const { service } = scheduler()
+  service.updateSettings({
+    ...service.status().settings,
+    sessionMode: 'learn',
+    questionsPerSession: 1,
+    practice: { ...scope, wrongEvery: 0 },
+  })
+  service.startLearning()
+  expect(service.answerView()).toMatchObject({ kind: 'material', material: { key: 'apple' } })
+  service.windowClosed()
+  expect(sample(3, scope, 'progressive').map(({ key }) => key)).toEqual([
+    'pear',
+    'mitigate',
+    'apple',
+  ])
+  expect(sample(2, { bankId, source: 'favorites' }, 'random')).toEqual([])
+  expect(sample(3, { bankId, source: 'mistakes' }, 'progressive')).toHaveLength(3)
+  const pearQuestion = bankService
+    .listQuestions({ bankId })
+    .find(({ materialKey }) => materialKey === 'pear')!
+  expect(createReminderStore(database).setFavorite(pearQuestion.id, true)).toBe(true)
+  expect(sample(2, { bankId, source: 'favorites' }, 'random').map(({ key }) => key)).toEqual([
+    'pear',
+  ])
+  expect(sample(10, { bankId: null, source: 'all' }, 'random')).toHaveLength(4)
+})
 
 it('links multiple questions to a bank-scoped material and rolls back failed imports', () => {
   const service = banks()
@@ -470,7 +582,8 @@ it('backfills vocabulary progress from v8 history and the current reading positi
     }),
   )
   database.exec(
-    `DROP TABLE correctly_answered_questions;
+    `DROP TABLE bank_learning_strategies;
+    DROP TABLE correctly_answered_questions;
     DROP TABLE study_material_progress;
     ALTER TABLE question_banks DROP COLUMN language;
     PRAGMA user_version = 8`,
@@ -521,7 +634,8 @@ it('backfills correct answers from v10 history, the current session, and review 
       session: { answers: [result(inProgress, 'correct')] },
     }),
   )
-  database.exec(`DROP TABLE correctly_answered_questions;
+  database.exec(`DROP TABLE bank_learning_strategies;
+    DROP TABLE correctly_answered_questions;
     PRAGMA user_version = 10`)
   database.close()
   database = openDatabase(directory)

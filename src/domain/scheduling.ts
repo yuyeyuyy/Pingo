@@ -7,7 +7,7 @@ export const QUESTION_PRESETS = [1, 3, 5, 10] as const
 export const SNOOZE_MINUTES = [5, 10, 30, 60] as const
 export const PAUSE_OPTIONS = [30, 60, 120, 'tomorrow'] as const
 export type PauseOption = (typeof PAUSE_OPTIONS)[number]
-export type SessionMode = 'study' | 'practice'
+export type SessionMode = 'study' | 'practice' | 'learn'
 
 export interface ReminderSettings {
   sessionMode?: SessionMode

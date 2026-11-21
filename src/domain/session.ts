@@ -68,7 +68,11 @@ export interface LearningSession {
   readonly answers: readonly SubmittedAnswer[]
   readonly practice?: PracticeSettings
   readonly strategy?: LearningStrategy
-  readonly study?: { readonly materials: readonly SessionStudyMaterial[]; readonly index: number }
+  readonly study?: {
+    readonly materials: readonly SessionStudyMaterial[]
+    readonly index: number
+    readonly materialsOnly?: true
+  }
 }
 
 export type VisibleQuestion = {
@@ -93,6 +97,7 @@ export type PronunciationView = (
       kind: 'material'
       total: number
       material: SessionStudyMaterial
+      materialsOnly?: true
     } & StudyMaterialTarget)
   | {
       kind: 'question'
@@ -107,14 +112,10 @@ export type PronunciationView = (
 
 export type AnswerView =
   | PronunciationView
-  | {
-      kind: 'summary'
-      sessionId: string
-      total: number
-      correct: number
-      incorrect: number
-      ungraded: number
-    }
+  | ({ kind: 'summary'; sessionId: string; total: number } & (
+      | { materialsOnly: true }
+      | { materialsOnly?: never; correct: number; incorrect: number; ungraded: number }
+    ))
   | null
 
 export interface SessionTarget {
@@ -173,6 +174,7 @@ export function nextStudyMaterial(session: LearningSession) {
     position: study.index + 1,
     total: study.materials.length,
     material: language && !material.language ? { ...material, language } : material,
+    ...(study.materialsOnly ? { materialsOnly: true as const } : {}),
   }
 }
 
@@ -379,6 +381,14 @@ export function gradeAnswer(question: SessionQuestion, answer: AnswerInput): Ans
 }
 
 export function sessionSummary(session: LearningSession): Extract<AnswerView, { kind: 'summary' }> {
+  if (session.study?.materialsOnly) {
+    return {
+      kind: 'summary',
+      sessionId: session.id,
+      total: session.study.materials.length,
+      materialsOnly: true,
+    }
+  }
   const counts = { correct: 0, incorrect: 0, ungraded: 0 }
   for (const answer of session.answers) counts[answer.feedback.outcome]++
   return { kind: 'summary', sessionId: session.id, total: session.questions.length, ...counts }

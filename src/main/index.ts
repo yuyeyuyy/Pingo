@@ -8,7 +8,10 @@ import { SchedulerService } from '../application/reminders/scheduler'
 import { openDatabase } from '../infrastructure/database/open'
 import { createLearningEngine } from '../infrastructure/database/progressive-learning'
 import { createQuestionBankRepository } from '../infrastructure/database/question-bank-repository'
-import { createStudyMaterialSource } from '../infrastructure/database/study-material-source'
+import {
+  createStudyMaterialSampler,
+  createStudyMaterialSource,
+} from '../infrastructure/database/study-material-source'
 import { createFreeDictionaryAdapter } from '../infrastructure/pronunciation/free-dictionary'
 import {
   createLearningQuestionSource,
@@ -89,6 +92,7 @@ function start(): void {
         learning: createLearningEngine(database),
         questions: createLearningQuestionSource(database),
         studyMaterials: createStudyMaterialSource(database),
+        sampleStudyMaterials: createStudyMaterialSampler(database),
         makeId: randomUUID,
         now: Date.now,
         schedule(delay, action) {

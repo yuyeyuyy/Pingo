@@ -42,7 +42,12 @@ export function reminderSettings(value: unknown): ReminderSettings {
   if (strategy !== undefined && strategy !== 'random' && strategy !== 'progressive')
     invalid('请选择有效的学习策略。')
   const sessionMode = input.sessionMode
-  if (sessionMode !== undefined && sessionMode !== 'study' && sessionMode !== 'practice')
+  if (
+    sessionMode !== undefined &&
+    sessionMode !== 'study' &&
+    sessionMode !== 'practice' &&
+    sessionMode !== 'learn'
+  )
     invalid('请选择有效的学习模式。')
   let quietHours: ReminderSettings['quietHours'] = null
   if (input.quietHours !== null) {
@@ -57,7 +62,12 @@ export function reminderSettings(value: unknown): ReminderSettings {
   return {
     enabled: flag(input.enabled),
     intervalMinutes: integer(input.intervalMinutes, 1, 1440, '提醒间隔须为 1 至 1440 分钟。'),
-    questionsPerSession: integer(input.questionsPerSession, 1, 20, '每次题量须为 1 至 20 道。'),
+    questionsPerSession: integer(
+      input.questionsPerSession,
+      1,
+      20,
+      sessionMode === 'learn' ? '每次资料数须为 1 至 20 份。' : '每次题量须为 1 至 20 道。',
+    ),
     mode,
     focusPopup: flag(input.focusPopup),
     avoidFullscreen: flag(input.avoidFullscreen),

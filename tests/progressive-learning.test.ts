@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { createQuestionBankService } from '../src/application/question-bank/service'
 import { parseQuestionsImport } from '../src/application/question-bank/validation'
 import type { SchedulerService } from '../src/application/reminders/scheduler'
+import type { LearningStrategy } from '../src/domain/progressive-learning'
 import type { Difficulty } from '../src/domain/question'
 import { MINUTE } from '../src/domain/scheduling'
 import type { AnswerInput } from '../src/domain/session'
@@ -167,6 +168,60 @@ it('deduplicates concepts across pools and fills new slots in difficulty order',
     [current.id, 'current', 'new'],
     [challenge.id, 'challenge', 'new'],
   ])
+})
+
+it('persists and applies independent strategies for each bank and the mixed scope', () => {
+  const first = banks().createBank({ name: '随机题库' }).id
+  const second = banks().createBank({ name: '渐进题库' }).id
+  const [firstQuestion] = addQuestions(first, 1, 1)
+  const [secondQuestion] = addQuestions(second, 1, 1)
+  let { service } = scheduler()
+  service.start()
+  function select(bankId: string | null, strategy?: LearningStrategy) {
+    return service.updateSettings({
+      ...service.status().settings,
+      strategy,
+      practice: { bankId, source: 'all', wrongEvery: 0 },
+    })
+  }
+
+  expect(select(first, 'random').settings.strategy).toBe('random')
+  expect(select(second).settings.strategy).toBe('progressive')
+  expect(select(second, 'progressive').settings.strategy).toBe('progressive')
+  expect(select(first).settings.strategy).toBe('random')
+  service.startLearning()
+  expect(service.answerView()).toMatchObject({
+    kind: 'question',
+    question: { id: firstQuestion!.id },
+  })
+  expect(createReminderStore(db).load()?.session?.strategy).toBe('random')
+
+  expect(select(second).settings.strategy).toBe('progressive')
+  expect(createReminderStore(db).load()?.session?.strategy).toBe('random')
+  service.windowClosed()
+  service.startLearning()
+  expect(service.answerView()).toMatchObject({
+    kind: 'question',
+    question: { id: secondQuestion!.id, pool: 'new' },
+  })
+  service.windowClosed()
+  expect(select(null).settings.strategy).toBe('progressive')
+  expect(select(null, 'random').settings.strategy).toBe('random')
+  service.stop()
+  db.close()
+  db = openDatabase(directory)
+  ;({ service } = scheduler())
+  service.start()
+
+  expect(service.status().learningStrategies).toEqual({
+    allBanks: 'random',
+    byBank: { [first]: 'random', [second]: 'progressive' },
+  })
+  expect(select(second).settings.strategy).toBe('progressive')
+  expect(select(null).settings.strategy).toBe('random')
+  banks().deleteBank({ bankId: first })
+  expect(service.status().learningStrategies.byBank).toEqual({ [second]: 'progressive' })
+  service.stop()
 })
 
 it('persists promotion and demotion per bank and only calibrates current-level new questions', () => {
@@ -363,6 +418,7 @@ it('migrates saved progress and removes the retired review interval from v12 set
   const { id } = banks().createBank({ name: '旧复习进度' })
   const [once, twice, recall, retry] = addQuestions(id, 4, 1)
   db.exec(`
+    DROP TABLE bank_learning_strategies;
     ALTER TABLE question_learning ADD COLUMN last_correct_round INTEGER;
     PRAGMA user_version = 12;
   `)
@@ -411,7 +467,7 @@ it('migrates old second reviews and mistakes without discarding the current sess
     },
   }
   db.prepare('INSERT INTO reminder_state VALUES (1, ?)').run(JSON.stringify(snapshot))
-  db.exec('PRAGMA user_version = 13')
+  db.exec('DROP TABLE bank_learning_strategies; PRAGMA user_version = 13')
   db.close()
   db = openDatabase(directory)
 

@@ -20,7 +20,7 @@ describe('SQLite initialization', () => {
     const userData = join(tempDirectory, 'userData')
     const db = openDatabase(userData)
     try {
-      expect(db.prepare('PRAGMA user_version').get()?.user_version).toBe(14)
+      expect(db.prepare('PRAGMA user_version').get()?.user_version).toBe(15)
       expect(db.prepare('PRAGMA foreign_keys').get()?.foreign_keys).toBe(1)
       db.prepare('INSERT INTO app_metadata (key, value) VALUES (?, ?)').run('sample', 'saved')
     } finally {
@@ -30,7 +30,7 @@ describe('SQLite initialization', () => {
 
     const reopened = openDatabase(userData)
     try {
-      expect(reopened.prepare('PRAGMA user_version').get()?.user_version).toBe(14)
+      expect(reopened.prepare('PRAGMA user_version').get()?.user_version).toBe(15)
       expect(
         reopened.prepare('SELECT value FROM app_metadata WHERE key = ?').get('sample')?.value,
       ).toBe('saved')
@@ -50,7 +50,7 @@ describe('SQLite initialization', () => {
 
     const current = openDatabase(tempDirectory)
     try {
-      expect(current.prepare('PRAGMA user_version').get()?.user_version).toBe(14)
+      expect(current.prepare('PRAGMA user_version').get()?.user_version).toBe(15)
       expect(
         current.prepare("SELECT value FROM app_metadata WHERE key = 'legacy'").get()?.value,
       ).toBe('preserved')
@@ -64,7 +64,8 @@ describe('SQLite initialization', () => {
   it('assigns English to old language banks and leaves basic banks without a language', () => {
     const db = openDatabase(tempDirectory)
     db.exec(`
-      DROP TABLE correctly_answered_questions;
+      DROP TABLE bank_learning_strategies;
+    DROP TABLE correctly_answered_questions;
         ALTER TABLE question_banks DROP COLUMN language;
       PRAGMA user_version = 9;
       INSERT INTO question_banks VALUES ('vocabulary', '旧词库', 'language');

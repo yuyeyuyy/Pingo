@@ -8,6 +8,8 @@ import {
 import type { PauseOption, ReminderSettings } from '../../domain/scheduling'
 import { DEFAULT_PRACTICE_SETTINGS, nextPracticeSource, samePractice } from '../../domain/review'
 import type { PracticeSettings, ReviewAttempt } from '../../domain/review'
+import { strategyForBank } from '../../domain/progressive-learning'
+import type { LearningStrategies, LearningStrategy } from '../../domain/progressive-learning'
 import {
   gradeAnswer,
   nextStudyMaterial,
@@ -55,11 +57,13 @@ export interface ReminderEffects {
   ended?: EndedSession
   review?: ReviewAttempt
   studySeen?: StudySubject & { at: number }
+  bankStrategy?: { bankId: string; strategy: LearningStrategy }
 }
 
 export interface ReminderStore {
   load(): ReminderState | undefined
   save(state: ReminderState, effects?: ReminderEffects): void
+  bankStrategies(): LearningStrategies['byBank']
   correctlyAnsweredQuestionIds(questionIds: readonly string[]): ReadonlySet<string>
   isFavorite(questionId: string): boolean
   setFavorite(questionId: string, favorite: boolean): boolean
@@ -70,6 +74,11 @@ export interface SchedulerDependencies {
   learning?: LearningEngine
   /** Returns the linked materials in the same order as the question IDs. */
   studyMaterials?(questionIds: readonly string[]): readonly SessionStudyMaterial[]
+  sampleStudyMaterials?(
+    count: number,
+    selection: LearningSelection,
+    strategy: LearningStrategy,
+  ): readonly SessionStudyMaterial[]
   questions(count: number, selection: LearningSelection): readonly SessionQuestion[]
   makeId(): string
   now(): number
@@ -139,12 +148,16 @@ export class SchedulerService {
 
   status(): ReminderStatus {
     const { settings, pauseUntil, session, nextAt } = this.state
+    const learningStrategies = this.learningStrategies()
+    const selection = this.selection()
+    const strategy = strategyForBank(learningStrategies, selection.bankId)
     const learning =
-      settings.strategy === 'progressive'
-        ? this.dependencies.learning?.status(this.selection(), this.dependencies.now())
+      strategy === 'progressive' && settings.sessionMode !== 'learn'
+        ? this.dependencies.learning?.status(selection, this.dependencies.now())
         : undefined
     return {
-      settings,
+      settings: selection.bankId === null ? settings : { ...settings, strategy },
+      learningStrategies,
       phase: this.running
         ? schedulerPhase(settings.enabled, pauseUntil, session?.stage)
         : 'STOPPED',
@@ -175,7 +188,7 @@ export class SchedulerService {
     return this.status()
   }
 
-  updateSettings(settings: ReminderSettings): ReminderStatus {
+  updateSettings({ strategy, ...settings }: ReminderSettings): ReminderStatus {
     const { enabled, intervalMinutes } = this.state.settings
     const { session, pauseUntil, nextAt } = this.state
     const shouldWait =
@@ -188,26 +201,32 @@ export class SchedulerService {
       target = this.dependencies.now() + settings.intervalMinutes * MINUTE
     }
     const practice = settings.practice ?? this.state.settings.practice
-    const strategy = settings.strategy ?? this.state.settings.strategy
+    const bankId = practice?.bankId ?? null
+    const allBanksStrategy =
+      (bankId === null ? strategy : undefined) ?? this.state.settings.strategy
+    const bankStrategy = bankId !== null && strategy ? { bankId, strategy } : undefined
     const sessionMode = settings.sessionMode ?? this.state.settings.sessionMode
     const practiceChanged = !samePractice(practice ?? DEFAULT_PRACTICE_SETTINGS, this.practice())
     if (
       practiceChanged ||
-      strategy !== this.state.settings.strategy ||
+      (strategy !== undefined && strategy !== strategyForBank(this.learningStrategies(), bankId)) ||
       sessionMode !== this.state.settings.sessionMode
     )
       this.notice = null
-    this.commit({
-      ...this.state,
-      settings: {
-        ...settings,
-        ...(practice ? { practice } : {}),
-        ...(strategy ? { strategy } : {}),
-        ...(sessionMode ? { sessionMode } : {}),
+    this.commit(
+      {
+        ...this.state,
+        settings: {
+          ...settings,
+          ...(practice ? { practice } : {}),
+          ...(allBanksStrategy ? { strategy: allBanksStrategy } : {}),
+          ...(sessionMode ? { sessionMode } : {}),
+        },
+        nextAt: target,
+        completedInCycle: practiceChanged ? 0 : this.state.completedInCycle,
       },
-      nextAt: target,
-      completedInCycle: practiceChanged ? 0 : this.state.completedInCycle,
-    })
+      { bankStrategy },
+    )
     if (!settings.enabled) this.dismiss()
     return this.status()
   }
@@ -274,6 +293,7 @@ export class SchedulerService {
     if (
       this.notice === 'empty-bank' ||
       this.notice === 'empty-study' ||
+      this.notice === 'empty-materials' ||
       this.notice === 'nothing-due'
     )
       this.notice = null
@@ -341,14 +361,12 @@ export class SchedulerService {
       return this.answerView()
     const material = nextStudyMaterial(session)
     if (material?.position === input.position) {
-      const next = { ...session, study: { ...session.study, index: input.position } }
-      this.commit(
-        {
-          ...this.state,
-          session: next,
-        },
-        { studySeen: this.studyExposure(next) },
-      )
+      if (session.study.materialsOnly && material.position === material.total) {
+        this.finish('completed')
+      } else {
+        const next = { ...session, study: { ...session.study, index: input.position } }
+        this.commit({ ...this.state, session: next }, { studySeen: this.studyExposure(next) })
+      }
     }
     return this.answerView()
   }
@@ -389,10 +407,29 @@ export class SchedulerService {
   }
 
   private makeSession(): LearningSession | null {
-    const { questionsPerSession: count, strategy = 'random' } = this.state.settings
+    const { questionsPerSession: count } = this.state.settings
     const practice = this.practice()
     const selection = this.selection()
+    const strategy = strategyForBank(this.learningStrategies(), selection.bankId)
     const now = this.dependencies.now()
+    const base = {
+      startedAt: now,
+      stage: 'pending',
+      index: 0,
+      answers: [],
+      practice,
+      strategy,
+    } as const
+    if (this.state.settings.sessionMode === 'learn') {
+      const materials = this.dependencies.sampleStudyMaterials?.(count, selection, strategy) ?? []
+      if (!materials.length) return this.noSession('empty-materials', now)
+      return {
+        ...base,
+        id: this.dependencies.makeId(),
+        questions: [],
+        study: { materials, index: 0, materialsOnly: true },
+      }
+    }
     const planned =
       strategy === 'progressive'
         ? this.dependencies.learning?.pick(count, selection, now, this.state.completedRounds)
@@ -421,27 +458,28 @@ export class SchedulerService {
       study = { materials, index: 0 }
     }
     if (!questions.length || missingMaterials) {
-      this.notice =
+      return this.noSession(
         planned?.notice ??
-        (selection.requiresMaterial
-          ? 'empty-study'
-          : selection.source === 'favorites'
-            ? 'empty-favorites'
-            : 'empty-bank')
-      this.commit({ ...this.state, nextAt: this.nextRegular(now) })
-      return null
+          (selection.requiresMaterial
+            ? 'empty-study'
+            : selection.source === 'favorites'
+              ? 'empty-favorites'
+              : 'empty-bank'),
+        now,
+      )
     }
     return {
+      ...base,
       id: this.dependencies.makeId(),
-      startedAt: now,
-      stage: 'pending',
       questions: questions.map((question) => prepareSessionQuestion(question, Math.random)),
-      index: 0,
-      answers: [],
-      practice,
-      strategy,
       ...(study ? { study } : {}),
     }
+  }
+
+  private noSession(notice: ReminderStatus['notice'], now: number): null {
+    this.notice = notice
+    this.commit({ ...this.state, nextAt: this.nextRegular(now) })
+    return null
   }
 
   private sampleRandom(count: number, selection: LearningSelection): readonly SessionQuestion[] {
@@ -455,11 +493,17 @@ export class SchedulerService {
     const session = this.state.session
     if (!session) return
     const at = this.dependencies.now()
-    const summary = outcome === 'completed' ? sessionSummary(session) : null
-    const ended = session.answers.length > 0 ? { session, at, outcome } : undefined
+    const completed = outcome === 'completed'
+    const materialsOnly = session.study?.materialsOnly
+    const summary = completed ? sessionSummary(session) : null
+    const ended =
+      session.answers.length > 0 || (materialsOnly && completed)
+        ? { session, at, outcome }
+        : undefined
+    const completedQuestionRound = completed && !materialsOnly
     const practice = this.practice()
     const completedInCycle =
-      outcome === 'completed' &&
+      completedQuestionRound &&
       session.practice &&
       samePractice(session.practice, practice) &&
       practice.source === 'all' &&
@@ -472,10 +516,9 @@ export class SchedulerService {
         session: null,
         nextAt: this.nextRegular(at),
         completedInCycle,
-        completedRounds:
-          outcome === 'completed'
-            ? (this.state.completedRounds ?? 0) + 1
-            : this.state.completedRounds,
+        completedRounds: completedQuestionRound
+          ? (this.state.completedRounds ?? 0) + 1
+          : this.state.completedRounds,
       },
       { ended, summary },
     )
@@ -492,11 +535,21 @@ export class SchedulerService {
     return this.state.settings.practice ?? DEFAULT_PRACTICE_SETTINGS
   }
 
+  private learningStrategies(): LearningStrategies {
+    return {
+      allBanks: this.state.settings.strategy ?? 'random',
+      byBank: this.dependencies.store.bankStrategies(),
+    }
+  }
+
   private selection(): LearningSelection {
     const practice = this.practice()
     return {
       bankId: practice.bankId,
-      source: nextPracticeSource(practice, this.state.completedInCycle ?? 0),
+      source:
+        this.state.settings.sessionMode === 'learn'
+          ? practice.source
+          : nextPracticeSource(practice, this.state.completedInCycle ?? 0),
       ...(this.state.settings.sessionMode === 'study' ? { requiresMaterial: true } : {}),
     }
   }

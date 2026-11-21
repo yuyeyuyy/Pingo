@@ -1,8 +1,23 @@
 import type { Difficulty } from './question'
 
 export type LearningStrategy = 'random' | 'progressive'
+
+export interface LearningStrategies {
+  allBanks: LearningStrategy
+  byBank: Readonly<Record<string, LearningStrategy>>
+}
+
+export function strategyForBank(strategies: LearningStrategies, bankId: string | null) {
+  if (bankId === null) return strategies.allBanks
+  return Object.hasOwn(strategies.byBank, bankId) ? strategies.byBank[bankId]! : 'progressive'
+}
 export type LearningRole = 'review' | 'current' | 'challenge'
-export type LearningNotice = 'empty-bank' | 'empty-favorites' | 'empty-study' | 'nothing-due'
+export type LearningNotice =
+  | 'empty-bank'
+  | 'empty-favorites'
+  | 'empty-study'
+  | 'empty-materials'
+  | 'nothing-due'
 
 export interface LearningStatus {
   level: Difficulty | null

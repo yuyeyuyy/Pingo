@@ -42,6 +42,36 @@ it('persists pronunciation preferences independently of reminder settings and ex
   expect(reopened.status().settings.intervalMinutes).toBe(45)
 })
 
+it('copies the v14 global strategy to existing banks during upgrade', () => {
+  const bankService = () => createQuestionBankService(createQuestionBankRepository(db), randomUUID)
+  const first = bankService().createBank({ name: '旧题库一' }).id
+  const second = bankService().createBank({ name: '旧题库二' }).id
+  const fixture = schedulerFixture({ store: createReminderStore(db), schedule: () => () => {} })
+  const service = fixture.create()
+  service.updateSettings({ ...service.status().settings, strategy: 'random' })
+  service.stop()
+  db.exec('DROP TABLE bank_learning_strategies; PRAGMA user_version = 14')
+  db.close()
+  db = openDatabase(directory)
+
+  const restored = schedulerFixture({
+    store: createReminderStore(db),
+    schedule: () => () => {},
+  }).create()
+  const status = restored.updateSettings({ ...restored.status().settings, strategy: 'progressive' })
+  expect(status.learningStrategies).toEqual({
+    allBanks: 'progressive',
+    byBank: { [first]: 'random', [second]: 'random' },
+  })
+  const third = bankService().createBank({ name: '新题库' }).id
+  const selected = restored.updateSettings({
+    ...status.settings,
+    strategy: undefined,
+    practice: { bankId: third, source: 'all', wrongEvery: 0 },
+  })
+  expect(selected.settings.strategy).toBe('progressive')
+})
+
 it('keeps v3 bank and question IDs, saved sessions, and history when adding bank templates', () => {
   const oldFolder = mkdtempSync(join(directory, 'legacy-'))
   const legacy = new DatabaseSync(join(oldFolder, 'pingo.sqlite'))
@@ -91,7 +121,7 @@ it('keeps v3 bank and question IDs, saved sessions, and history when adding bank
 
   const migrated = openDatabase(oldFolder)
   try {
-    expect(migrated.prepare('PRAGMA user_version').get()?.user_version).toBe(14)
+    expect(migrated.prepare('PRAGMA user_version').get()?.user_version).toBe(15)
     expect(createReminderStore(migrated).load()?.session).toEqual(snapshot)
     expect(
       migrated.prepare("SELECT payload FROM learning_history WHERE session_id = 'done'").get()

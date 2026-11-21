@@ -1,6 +1,10 @@
 import type { ReminderSettings, SchedulerPhase } from '../domain/scheduling'
 import type { AnswerInput, AnswerView, SessionTarget } from '../domain/session'
-import type { LearningNotice, LearningStatus } from '../domain/progressive-learning'
+import type {
+  LearningNotice,
+  LearningStatus,
+  LearningStrategies,
+} from '../domain/progressive-learning'
 import type { PronunciationPreferences } from '../domain/pronunciation'
 
 export {
@@ -18,11 +22,12 @@ export type { AnswerView, AnswerInput, SessionTarget, StudyMaterialTarget } from
 export { DEFAULT_PRACTICE_SETTINGS } from '../domain/review'
 export type { PracticeSettings } from '../domain/review'
 export type { LearningStrategy } from '../domain/progressive-learning'
-export { LEARNING_POOLS } from '../domain/progressive-learning'
+export { LEARNING_POOLS, strategyForBank } from '../domain/progressive-learning'
 
 export interface ReminderStatus {
   phase: SchedulerPhase
   settings: ReminderSettings
+  learningStrategies: LearningStrategies
   nextAt: number | null
   pauseUntil: number | null
   pendingSessionId: string | null
